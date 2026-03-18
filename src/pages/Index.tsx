@@ -1,16 +1,50 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useState } from "react";
+import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardHome from "@/components/dashboard/DashboardHome";
+import GroupsPanel from "@/components/dashboard/GroupsPanel";
+import MembersPanel from "@/components/dashboard/MembersPanel";
+import LogsPanel from "@/components/dashboard/LogsPanel";
+import WhispersPanel from "@/components/dashboard/WhispersPanel";
+import EntertainmentPanel from "@/components/dashboard/EntertainmentPanel";
+import SettingsPanel from "@/components/dashboard/SettingsPanel";
 
-// IMPORTANT: Fully REPLACE this with your own code
-const PlaceholderIndex = () => {
-  // PLACEHOLDER: Replace this entire return statement with the user's app.
-  // The inline background color is intentionally not part of the design system.
+export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings";
+
+const Index = () => {
+  const [activePanel, setActivePanel] = useState<PanelId>("home");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const renderPanel = () => {
+    switch (activePanel) {
+      case "home": return <DashboardHome />;
+      case "groups": return <GroupsPanel />;
+      case "members": return <MembersPanel />;
+      case "logs": return <LogsPanel />;
+      case "whispers": return <WhispersPanel />;
+      case "entertainment": return <EntertainmentPanel />;
+      case "settings": return <SettingsPanel />;
+      default: return <DashboardHome />;
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: '#fcfbf8' }}>
-      <img data-lovable-blank-page-placeholder="REMOVE_THIS" src="/placeholder.svg" alt="Your app will live here!" />
+    <div className="flex min-h-screen bg-background" dir="rtl">
+      <DashboardSidebar
+        activePanel={activePanel}
+        onPanelChange={(p) => { setActivePanel(p); setSidebarOpen(false); }}
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+      />
+      <main className="flex-1 overflow-auto">
+        <div className="p-4 md:p-6 lg:p-8 max-w-7xl mx-auto">
+          {renderPanel()}
+        </div>
+      </main>
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-foreground/20 z-30 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
     </div>
   );
 };
-
-const Index = PlaceholderIndex;
 
 export default Index;

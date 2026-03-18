@@ -14,13 +14,228 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      telegram_admin_logs: {
+        Row: {
+          action: string
+          admin_user_id: number | null
+          admin_username: string | null
+          chat_id: number
+          created_at: string
+          details: string | null
+          id: string
+          target_user_id: number | null
+          target_username: string | null
+        }
+        Insert: {
+          action: string
+          admin_user_id?: number | null
+          admin_username?: string | null
+          chat_id: number
+          created_at?: string
+          details?: string | null
+          id?: string
+          target_user_id?: number | null
+          target_username?: string | null
+        }
+        Update: {
+          action?: string
+          admin_user_id?: number | null
+          admin_username?: string | null
+          chat_id?: number
+          created_at?: string
+          details?: string | null
+          id?: string
+          target_user_id?: number | null
+          target_username?: string | null
+        }
+        Relationships: []
+      }
+      telegram_bot_state: {
+        Row: {
+          id: number
+          update_offset: number
+          updated_at: string
+        }
+        Insert: {
+          id: number
+          update_offset?: number
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          update_offset?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      telegram_groups: {
+        Row: {
+          anti_spam: boolean | null
+          chat_id: number
+          created_at: string
+          entertainment_enabled: boolean | null
+          id: string
+          lock_files: boolean | null
+          lock_links: boolean | null
+          lock_media: boolean | null
+          lock_stickers: boolean | null
+          title: string | null
+          updated_at: string
+          welcome_message: string | null
+        }
+        Insert: {
+          anti_spam?: boolean | null
+          chat_id: number
+          created_at?: string
+          entertainment_enabled?: boolean | null
+          id?: string
+          lock_files?: boolean | null
+          lock_links?: boolean | null
+          lock_media?: boolean | null
+          lock_stickers?: boolean | null
+          title?: string | null
+          updated_at?: string
+          welcome_message?: string | null
+        }
+        Update: {
+          anti_spam?: boolean | null
+          chat_id?: number
+          created_at?: string
+          entertainment_enabled?: boolean | null
+          id?: string
+          lock_files?: boolean | null
+          lock_links?: boolean | null
+          lock_media?: boolean | null
+          lock_stickers?: boolean | null
+          title?: string | null
+          updated_at?: string
+          welcome_message?: string | null
+        }
+        Relationships: []
+      }
+      telegram_messages: {
+        Row: {
+          chat_id: number
+          created_at: string
+          raw_update: Json
+          text: string | null
+          update_id: number
+          user_id: number | null
+          username: string | null
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          raw_update: Json
+          text?: string | null
+          update_id: number
+          user_id?: number | null
+          username?: string | null
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          raw_update?: Json
+          text?: string | null
+          update_id?: number
+          user_id?: number | null
+          username?: string | null
+        }
+        Relationships: []
+      }
+      telegram_users: {
+        Row: {
+          chat_id: number
+          created_at: string
+          first_name: string | null
+          id: string
+          is_banned: boolean | null
+          is_muted: boolean | null
+          last_name: string | null
+          level: number | null
+          points: number | null
+          updated_at: string
+          user_id: number
+          username: string | null
+          warnings: number | null
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          first_name?: string | null
+          id?: string
+          is_banned?: boolean | null
+          is_muted?: boolean | null
+          last_name?: string | null
+          level?: number | null
+          points?: number | null
+          updated_at?: string
+          user_id: number
+          username?: string | null
+          warnings?: number | null
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          first_name?: string | null
+          id?: string
+          is_banned?: boolean | null
+          is_muted?: boolean | null
+          last_name?: string | null
+          level?: number | null
+          points?: number | null
+          updated_at?: string
+          user_id?: number
+          username?: string | null
+          warnings?: number | null
+        }
+        Relationships: []
+      }
+      telegram_whispers: {
+        Row: {
+          chat_id: number
+          created_at: string
+          from_user_id: number
+          from_username: string | null
+          id: string
+          is_read: boolean | null
+          message: string
+          to_user_id: number
+          to_username: string | null
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          from_user_id: number
+          from_username?: string | null
+          id?: string
+          is_read?: boolean | null
+          message: string
+          to_user_id: number
+          to_username?: string | null
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          from_user_id?: number
+          from_username?: string | null
+          id?: string
+          is_read?: boolean | null
+          message?: string
+          to_user_id?: number
+          to_username?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_points: {
+        Args: { p_chat_id: number; p_user_id: number }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
