@@ -1,5 +1,7 @@
-import { Bot, Home, Users, MessageSquare, Shield, Gamepad2, Settings, Menu, X, Zap } from "lucide-react";
+import { Bot, Home, Users, MessageSquare, Shield, Gamepad2, Settings, Menu, X, Zap, ExternalLink, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import type { PanelId } from "@/pages/Index";
 
 interface Props {
@@ -20,6 +22,11 @@ const menuItems: { id: PanelId; label: string; icon: React.ElementType }[] = [
 ];
 
 const DashboardSidebar = ({ activePanel, onPanelChange, isOpen, onToggle }: Props) => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    toast.success("تم تسجيل الخروج");
+  };
+
   return (
     <>
       {/* Mobile toggle */}
@@ -71,10 +78,26 @@ const DashboardSidebar = ({ activePanel, onPanelChange, isOpen, onToggle }: Prop
         </nav>
 
         {/* Footer */}
-        <div className="p-4 border-t border-sidebar-border">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-success animate-pulse-glow" />
-            <span className="text-xs text-muted-foreground">البوت متصل</span>
+        <div className="p-4 border-t border-sidebar-border space-y-3">
+          {/* Bot Link */}
+          <a
+            href="https://t.me/Groups12Masterbot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-xs text-sidebar-foreground hover:text-sidebar-primary transition-colors px-2 py-2 rounded-lg hover:bg-sidebar-accent/50"
+          >
+            <ExternalLink className="h-4 w-4" />
+            <span>رابط البوت على تيليجرام</span>
+          </a>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-success animate-pulse-glow" />
+              <span className="text-xs text-muted-foreground">البوت متصل</span>
+            </div>
+            <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs h-7 px-2 text-muted-foreground hover:text-destructive">
+              <LogOut className="h-3 w-3" />
+            </Button>
           </div>
         </div>
       </aside>
