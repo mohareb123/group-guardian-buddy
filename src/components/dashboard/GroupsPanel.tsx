@@ -1,25 +1,38 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Save } from "lucide-react";
+import { toast } from "sonner";
 
 const GroupsPanel = () => {
   const [groups, setGroups] = useState<any[]>([]);
 
-  useEffect(() => {
-    const fetch = async () => {
-      const { data } = await supabase.from("telegram_groups").select("*").order("created_at", { ascending: false });
-      setGroups(data || []);
-    };
-    fetch();
-  }, []);
+  const fetchGroups = async () => {
+    const { data } = await supabase.from("telegram_groups").select("*").order("created_at", { ascending: false });
+    setGroups(data || []);
+  };
+
+  useEffect(() => { fetchGroups(); }, []);
+
+  const toggleSetting = async (chatId: number, field: string, value: boolean) => {
+    await supabase.from("telegram_groups").update({ [field]: value }).eq("chat_id", chatId);
+    toast.success("✅ تم التحديث");
+    fetchGroups();
+  };
+
+  const updateWelcome = async (chatId: number, message: string) => {
+    await supabase.from("telegram_groups").update({ welcome_message: message }).eq("chat_id", chatId);
+    toast.success("✅ تم تحديث رسالة الترحيب");
+  };
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">المجموعات</h1>
-        <p className="text-muted-foreground text-sm mt-1">إدارة المجموعات المتصلة بالبوت</p>
+        <p className="text-muted-foreground text-sm mt-1">تحكم مباشر في إعدادات المجموعات</p>
       </div>
 
       {groups.length === 0 ? (
@@ -39,26 +52,38 @@ const GroupsPanel = () => {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">منع الروابط</span>
-                    <Switch checked={group.lock_links} disabled />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">منع الوسائط</span>
-                    <Switch checked={group.lock_media} disabled />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">منع السبام</span>
-                    <Switch checked={group.anti_spam} disabled />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">الترفيه</span>
-                    <Switch checked={group.entertainment_enabled} disabled />
-                  </div>
+                  {[
+                    { label: "منع الروابط", field: "lock_links", value: group.lock_links },
+                    { label: "منع الوسائط", field: "lock_media", value: group.lock_media },
+                    { label: "منع الملصقات", field: "lock_stickers", value: group.lock_stickers },
+                    { label: "منع الملفات", field: "lock_files", value: group.lock_files },
+                    { label: "مضاد السبام", field: "anti_spam", value: group.anti_spam },
+                    { label: "الترفيه", field: "entertainment_enabled", value: group.entertainment_enabled },
+                  ].map((s) => (
+                    <div key={s.field} className="flex items-center justify-between">
+                      <span className="text-sm">{s.label}</span>
+                      <Switch checked={!!s.value} onCheckedChange={(v) => toggleSetting(group.chat_id, s.field, v)} />
+                    </div>
+                  ))}
                 </div>
-                <div className="pt-2 border-t">
-                  <p className="text-xs text-muted-foreground mb-1">رسالة الترحيب:</p>
-                  <p className="text-sm bg-muted/50 p-3 rounded-lg">{group.welcome_message}</p>
+                <div className="pt-2 border-t space-y-2">
+                  <p className="text-xs text-muted-foreground">رسالة الترحيب:</p>
+                  <div className="flex gap-2">
+                    <Input
+                      defaultValue={group.welcome_message || ""}
+                      id={`welcome-${group.chat_id}`}
+                      className="flex-1"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const el = document.getElementById(`welcome-${group.chat_id}`) as HTMLInputElement;
+                        if (el) updateWelcome(group.chat_id, el.value);
+                      }}
+                    >
+                      <Save className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

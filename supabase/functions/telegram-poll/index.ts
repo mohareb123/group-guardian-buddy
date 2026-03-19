@@ -90,6 +90,16 @@ function isDeveloper(userId: number): boolean {
   return userId === DEVELOPER_ID;
 }
 
+// ==================== NOTIFY DEVELOPER ====================
+
+async function notifyDeveloper(text: string) {
+  try {
+    await sendMsg(DEVELOPER_ID, text);
+  } catch (e) {
+    console.error('Failed to notify developer:', e);
+  }
+}
+
 // ==================== MENTION/TAG ALL ====================
 
 async function tagAllMembers(supabase: any, chatId: number, callerUsername: string) {
@@ -100,28 +110,39 @@ async function tagAllMembers(supabase: any, chatId: number, callerUsername: stri
     .eq('chat_id', chatId)
     .eq('is_banned', false);
 
+  // Also get total count from Telegram
+  let totalCount = 0;
+  try {
+    const countData = await tgCall('getChatMembersCount', { chat_id: chatId });
+    totalCount = countData.result || 0;
+  } catch {}
+
   if (!members || members.length === 0) {
-    await sendMsg(chatId, '❌ لا يوجد أعضاء مسجلين');
+    await sendMsg(chatId, '❌ لا يوجد أعضاء مسجلين بعد. الأعضاء يتم تسجيلهم تلقائياً عند إرسال أي رسالة.');
     return;
   }
 
-  // Split into chunks of 5 per message (Telegram limit for mentions)
+  await sendMsg(chatId, `📢 <b>نداء عام من ${callerUsername}!</b>\n👥 يتم مناداة <b>${members.length}</b> عضو${totalCount > members.length ? ` من أصل ${totalCount}` : ''}...`);
+
+  // Use text mentions (tg://user?id=X) which notify users even without username
+  // Split into chunks of 5 per message to ensure notifications work
   const chunks: string[][] = [];
   for (let i = 0; i < members.length; i += 5) {
     const chunk = members.slice(i, i + 5).map((m: any) => {
-      if (m.username) return `@${m.username}`;
-      return `<a href="tg://user?id=${m.user_id}">${m.first_name || m.user_id}</a>`;
+      const name = m.first_name || m.username || String(m.user_id);
+      // Always use tg://user?id= format for guaranteed notification
+      return `<a href="tg://user?id=${m.user_id}">${name}</a>`;
     });
     chunks.push(chunk);
   }
 
-  await sendMsg(chatId, `📢 <b>نداء من ${callerUsername} لجميع الأعضاء (${members.length}):</b>`);
-  
   for (const chunk of chunks) {
-    await sendMsg(chatId, chunk.join(' | '));
-    // Small delay to avoid rate limiting
-    await new Promise(r => setTimeout(r, 500));
+    await sendMsg(chatId, `📣 ${chunk.join(' | ')}`);
+    // Delay between messages to avoid rate limiting
+    await new Promise(r => setTimeout(r, 800));
   }
+
+  await sendMsg(chatId, `✅ تم مناداة <b>${members.length}</b> عضو بنجاح!`);
 }
 
 // ==================== AI ASSISTANT "فادي" ====================
@@ -130,10 +151,8 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
   const isUserAdmin = await isAdmin(chatId, userId);
   const isOwner = isDeveloper(userId);
   
-  // Get group info
   const { data: group } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
   
-  // Build context for AI
   const systemPrompt = `أنت فادي، مساعد ذكي لإدارة مجموعات تيليجرام. أنت ودود وذكي ومرح.
 تتحدث بالعربية (لهجة مصرية خفيفة).
 المستخدم الحالي: ${username} (ID: ${userId})
@@ -349,15 +368,41 @@ async function handleCommand(supabase: any, update: any) {
     await ensureUser(supabase, userId, chatId, msg.from.username, msg.from.first_name, msg.from.last_name);
   }
 
-  // New member welcome
+  // New member welcome + notify developer
   if (msg.new_chat_members) {
-    const { data: group } = await supabase.from('telegram_groups').select('welcome_message').eq('chat_id', chatId).single();
+    const { data: group } = await supabase.from('telegram_groups').select('welcome_message, title').eq('chat_id', chatId).single();
     const welcome = group?.welcome_message || 'مرحباً بك في المجموعة! 👋';
+    const groupTitle = group?.title || msg.chat.title || 'مجموعة';
+    
     for (const member of msg.new_chat_members) {
       const name = member.first_name || member.username || 'عضو جديد';
       await sendMsg(chatId, `${welcome}\n\nأهلاً <b>${name}</b>! 🎉`);
       await ensureUser(supabase, member.id, chatId, member.username, member.first_name, member.last_name);
+      
+      // 🔔 Notify developer about new member
+      await notifyDeveloper(
+        `🆕 <b>عضو جديد!</b>\n\n` +
+        `👤 الاسم: <b>${name}</b>\n` +
+        `🔗 المعرف: ${member.username ? `@${member.username}` : 'بدون'}\n` +
+        `🆔 ID: <code>${member.id}</code>\n` +
+        `💬 المجموعة: <b>${groupTitle}</b>\n` +
+        `📅 الوقت: ${new Date().toLocaleString('ar')}`
+      );
     }
+    return;
+  }
+
+  // Left member notify
+  if (msg.left_chat_member) {
+    const member = msg.left_chat_member;
+    const name = member.first_name || member.username || 'عضو';
+    const groupTitle = msg.chat.title || 'مجموعة';
+    await notifyDeveloper(
+      `🚪 <b>عضو غادر!</b>\n\n` +
+      `👤 الاسم: <b>${name}</b>\n` +
+      `🔗 المعرف: ${member.username ? `@${member.username}` : 'بدون'}\n` +
+      `💬 المجموعة: <b>${groupTitle}</b>`
+    );
     return;
   }
 
@@ -368,25 +413,21 @@ async function handleCommand(supabase: any, update: any) {
       const admin = await isAdmin(chatId, userId);
       const dev = isDeveloper(userId);
       
-      // Link check
       if (group.lock_links && !admin && !dev && msg.entities?.some((e: any) => e.type === 'url' || e.type === 'text_link')) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
         await sendMsg(chatId, `⚠️ @${username} الروابط ممنوعة في هذه المجموعة!`);
         return;
       }
-      // Media check
       if (group.lock_media && !admin && !dev && (msg.photo || msg.video || msg.animation || msg.document?.mime_type?.startsWith('video'))) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
         await sendMsg(chatId, `⚠️ @${username} الوسائط ممنوعة في هذه المجموعة!`);
         return;
       }
-      // Sticker check
       if (group.lock_stickers && !admin && !dev && msg.sticker) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
         await sendMsg(chatId, `⚠️ @${username} الملصقات ممنوعة في هذه المجموعة!`);
         return;
       }
-      // File check
       if (group.lock_files && !admin && !dev && msg.document) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
         await sendMsg(chatId, `⚠️ @${username} الملفات ممنوعة في هذه المجموعة!`);
@@ -405,7 +446,6 @@ async function handleCommand(supabase: any, update: any) {
 
   // Commands
   if (!text.startsWith('/')) {
-    // Add points for activity
     if (msg.chat.type !== 'private') {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
     }
@@ -413,7 +453,6 @@ async function handleCommand(supabase: any, update: any) {
   }
 
   const [cmd, ...args] = text.split(/\s+/);
-  // Remove bot username from command
   const botInfo = await tgCall('getMe', {}).catch(() => ({ result: { username: '' } }));
   const botUsername = botInfo.result?.username?.toLowerCase() || '';
   const command = cmd.toLowerCase().replace(`@${botUsername}`, '');
@@ -421,11 +460,7 @@ async function handleCommand(supabase: any, update: any) {
   switch (command) {
     case '/start':
       if (msg.chat.type === 'private') {
-        // Check if it's a whisper start
-        if (args[0]?.startsWith('whisper_')) {
-          // Handle whisper in private
-          break;
-        }
+        if (args[0]?.startsWith('whisper_')) break;
         await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات</b>\n\n✨ أقدر أساعدك في إدارة مجموعتك بالكامل\n\n🧠 يمكنك التحدث مع <b>فادي</b> (الذكاء الاصطناعي) في المجموعة بذكر اسمه\n\nمثال: "يا فادي احظر هذا الشخص"\n\n📋 اكتب /help لعرض جميع الأوامر`, {
           inline_keyboard: [
             [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
@@ -671,8 +706,6 @@ async function handleCommand(supabase: any, update: any) {
     case '/report':
       if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة المخالف للإبلاغ عنه'); break; }
       {
-        // Notify admins
-        const admins = await tgCall('getChatAdministrators', { chat_id: chatId }).catch(() => ({ result: [] }));
         await sendMsg(chatId, `🚨 <b>بلاغ جديد!</b>\n\nمن: <b>${username}</b>\nضد: <b>${targetUser.first_name || targetUser.username}</b>\nالسبب: ${args.join(' ') || 'غير محدد'}\n\n⚠️ تم إخطار المشرفين`);
         await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'report', args.join(' ') || 'بدون سبب');
       }
@@ -704,8 +737,6 @@ async function handleCommand(supabase: any, update: any) {
         await sendMsg(chatId, `🪙 قلب <b>${username}</b> العملة والنتيجة: <b>${result}</b>`);
       }
       break;
-
-    // ==================== ENTERTAINMENT ====================
 
     case '/quiz': {
       const quiz = quizzes[Math.floor(Math.random() * quizzes.length)];
@@ -803,9 +834,9 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     case '/random': {
-      const { data: members } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).eq('is_banned', false);
-      if (members && members.length > 0) {
-        const random = members[Math.floor(Math.random() * members.length)];
+      const { data: rmembers } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).eq('is_banned', false);
+      if (rmembers && rmembers.length > 0) {
+        const random = rmembers[Math.floor(Math.random() * rmembers.length)];
         const name = random.first_name || random.username || random.user_id;
         await sendMsg(chatId, `🎲 <b>العضو العشوائي:</b>\n\n🎯 <a href="tg://user?id=${random.user_id}">${name}</a> 🎉`);
       } else {
@@ -903,7 +934,6 @@ Deno.serve(async () => {
       const updates = data.result ?? [];
       if (updates.length === 0) continue;
 
-      // Store messages
       const msgRows = updates
         .filter((u: any) => u.message)
         .map((u: any) => ({
@@ -919,7 +949,6 @@ Deno.serve(async () => {
         await supabase.from('telegram_messages').upsert(msgRows, { onConflict: 'update_id' });
       }
 
-      // Process each update
       for (const update of updates) {
         try {
           if (update.message) await handleCommand(supabase, update);
