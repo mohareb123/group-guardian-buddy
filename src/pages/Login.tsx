@@ -1,29 +1,39 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Bot, LogIn } from "lucide-react";
+import { Bot, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isSignup, setIsSignup] = useState(false);
   const navigate = useNavigate();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    
-    if (error) {
-      toast.error("فشل تسجيل الدخول: " + error.message);
+
+    if (isSignup) {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        toast.error("فشل إنشاء الحساب: " + error.message);
+      } else {
+        toast.success("تم إنشاء الحساب! سجل دخولك الآن");
+        navigate("/");
+      }
     } else {
-      toast.success("تم تسجيل الدخول بنجاح!");
-      navigate("/");
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        toast.error("فشل تسجيل الدخول: " + error.message);
+      } else {
+        toast.success("تم تسجيل الدخول بنجاح!");
+        navigate("/");
+      }
     }
     setLoading(false);
   };
@@ -36,48 +46,35 @@ const Login = () => {
             <Bot className="h-10 w-10 text-primary-foreground" />
           </div>
           <CardTitle className="text-2xl">بوت المدير</CardTitle>
-          <p className="text-sm text-muted-foreground">سجل دخولك للوصول إلى لوحة التحكم</p>
+          <p className="text-sm text-muted-foreground">
+            {isSignup ? "أنشئ حسابك للوصول إلى لوحة التحكم" : "سجل دخولك للوصول إلى لوحة التحكم"}
+          </p>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">البريد الإلكتروني</label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@example.com"
-                required
-                dir="ltr"
-              />
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" required dir="ltr" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">كلمة المرور</label>
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                dir="ltr"
-              />
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required dir="ltr" minLength={6} />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "جاري الدخول..." : (
-                <>
-                  <LogIn className="h-4 w-4 ml-2" />
-                  تسجيل الدخول
-                </>
+              {loading ? "جاري المعالجة..." : isSignup ? (
+                <><UserPlus className="h-4 w-4 ml-2" /> إنشاء حساب</>
+              ) : (
+                <><LogIn className="h-4 w-4 ml-2" /> تسجيل الدخول</>
               )}
             </Button>
           </form>
-          <div className="mt-6 text-center">
-            <a
-              href="https://t.me/Groups12Masterbot"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-primary hover:underline"
-            >
+          <div className="mt-4 text-center">
+            <button onClick={() => setIsSignup(!isSignup)} className="text-sm text-primary hover:underline">
+              {isSignup ? "لديك حساب؟ سجل الدخول" : "ليس لديك حساب؟ أنشئ واحد"}
+            </button>
+          </div>
+          <div className="mt-4 text-center">
+            <a href="https://t.me/Groups12Masterbot" target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline">
               🤖 رابط البوت على تيليجرام
             </a>
           </div>
