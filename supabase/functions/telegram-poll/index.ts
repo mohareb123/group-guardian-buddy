@@ -51,32 +51,17 @@ async function sendMsg(chatId: number, text: string, replyMarkup?: any, replyToM
 }
 
 async function logAction(supabase: any, chatId: number, adminUserId: number, adminUsername: string, targetUserId: number, targetUsername: string, action: string, details?: string) {
-  await supabase.from('telegram_admin_logs').insert({
-    chat_id: chatId,
-    admin_user_id: adminUserId,
-    admin_username: adminUsername,
-    target_user_id: targetUserId,
-    target_username: targetUsername,
-    action,
-    details,
-  });
+  await supabase.from('telegram_admin_logs').insert({ chat_id: chatId, admin_user_id: adminUserId, admin_username: adminUsername, target_user_id: targetUserId, target_username: targetUsername, action, details });
 }
 
 async function ensureUser(supabase: any, userId: number, chatId: number, username?: string, firstName?: string, lastName?: string) {
   await supabase.from('telegram_users').upsert({
-    user_id: userId,
-    chat_id: chatId,
-    username: username || null,
-    first_name: firstName || null,
-    last_name: lastName || null,
+    user_id: userId, chat_id: chatId, username: username || null, first_name: firstName || null, last_name: lastName || null,
   }, { onConflict: 'user_id,chat_id' });
 }
 
 async function ensureGroup(supabase: any, chatId: number, title?: string) {
-  await supabase.from('telegram_groups').upsert({
-    chat_id: chatId,
-    title: title || null,
-  }, { onConflict: 'chat_id' });
+  await supabase.from('telegram_groups').upsert({ chat_id: chatId, title: title || null }, { onConflict: 'chat_id' });
 }
 
 async function isAdmin(chatId: number, userId: number): Promise<boolean> {
@@ -86,211 +71,121 @@ async function isAdmin(chatId: number, userId: number): Promise<boolean> {
   } catch { return false; }
 }
 
-function isDeveloper(userId: number): boolean {
-  return userId === DEVELOPER_ID;
-}
-
-// ==================== NOTIFY DEVELOPER ====================
+function isDeveloper(userId: number): boolean { return userId === DEVELOPER_ID; }
 
 async function notifyDeveloper(text: string) {
-  try {
-    await sendMsg(DEVELOPER_ID, text);
-  } catch (e) {
-    console.error('Failed to notify developer:', e);
-  }
+  try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
-// ==================== MENTION/TAG ALL ====================
+async function callAI(prompt: string, systemPrompt: string): Promise<string> {
+  const res = await fetch(AI_GATEWAY_URL, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'google/gemini-2.5-flash',
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`AI error: ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+// ==================== FEATURE 1: TAGALL (IMPROVED) ====================
 
 async function tagAllMembers(supabase: any, chatId: number, callerUsername: string) {
-  // Get all members from DB
-  const { data: members } = await supabase
-    .from('telegram_users')
-    .select('username, first_name, user_id')
-    .eq('chat_id', chatId)
-    .eq('is_banned', false);
-
-  // Also get total count from Telegram
+  const { data: members } = await supabase.from('telegram_users').select('username, first_name, user_id').eq('chat_id', chatId).eq('is_banned', false);
   let totalCount = 0;
-  try {
-    const countData = await tgCall('getChatMembersCount', { chat_id: chatId });
-    totalCount = countData.result || 0;
-  } catch {}
+  try { const c = await tgCall('getChatMembersCount', { chat_id: chatId }); totalCount = c.result || 0; } catch {}
 
   if (!members || members.length === 0) {
-    await sendMsg(chatId, '❌ لا يوجد أعضاء مسجلين بعد. الأعضاء يتم تسجيلهم تلقائياً عند إرسال أي رسالة.');
+    await sendMsg(chatId, '❌ لا يوجد أعضاء مسجلين بعد');
     return;
   }
 
   await sendMsg(chatId, `📢 <b>نداء عام من ${callerUsername}!</b>\n👥 يتم مناداة <b>${members.length}</b> عضو${totalCount > members.length ? ` من أصل ${totalCount}` : ''}...`);
 
-  // Use text mentions (tg://user?id=X) which notify users even without username
-  // Split into chunks of 5 per message to ensure notifications work
   const chunks: string[][] = [];
   for (let i = 0; i < members.length; i += 5) {
-    const chunk = members.slice(i, i + 5).map((m: any) => {
-      const name = m.first_name || m.username || String(m.user_id);
-      // Always use tg://user?id= format for guaranteed notification
-      return `<a href="tg://user?id=${m.user_id}">${name}</a>`;
-    });
+    const chunk = members.slice(i, i + 5).map((m: any) => `<a href="tg://user?id=${m.user_id}">${m.first_name || m.username || m.user_id}</a>`);
     chunks.push(chunk);
   }
 
   for (const chunk of chunks) {
     await sendMsg(chatId, `📣 ${chunk.join(' | ')}`);
-    // Delay between messages to avoid rate limiting
     await new Promise(r => setTimeout(r, 800));
   }
-
   await sendMsg(chatId, `✅ تم مناداة <b>${members.length}</b> عضو بنجاح!`);
 }
 
-// ==================== AI ASSISTANT "فادي" ====================
+// ==================== FEATURE 2: AI ASSISTANT "فادي" ====================
 
 async function handleAI(supabase: any, chatId: number, userId: number, username: string, text: string, replyMsg: any, messageId: number) {
   const isUserAdmin = await isAdmin(chatId, userId);
   const isOwner = isDeveloper(userId);
-  
-  const { data: group } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
-  
-  const systemPrompt = `أنت فادي، مساعد ذكي لإدارة مجموعات تيليجرام. أنت ودود وذكي ومرح.
-تتحدث بالعربية (لهجة مصرية خفيفة).
-المستخدم الحالي: ${username} (ID: ${userId})
-هل هو مشرف: ${isUserAdmin ? 'نعم' : 'لا'}
-هل هو المطور: ${isOwner ? 'نعم' : 'لا'}
 
-${replyMsg ? `الرسالة المردود عليها من: ${replyMsg.from?.first_name || replyMsg.from?.username || 'مجهول'} (ID: ${replyMsg.from?.id})
-نص الرسالة المردود عليها: ${replyMsg.text || '(بدون نص)'}` : ''}
+  const systemPrompt = `أنت فادي، مساعد ذكي لإدارة مجموعات تيليجرام. ودود وذكي ومرح. لهجة مصرية خفيفة.
+المستخدم: ${username} (ID: ${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
+${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID: ${replyMsg.from?.id}) - "${replyMsg.text || '(بدون نص)'}"` : ''}
 
-إذا طلب المستخدم إجراء إداري (حظر، طرد، كتم، تحذير، ترقية، تخفيض، قفل، فتح) وكان مشرفاً أو المطور:
-- أعد الرد بصيغة JSON في نهاية رسالتك هكذا: [ACTION:{"type":"ban/kick/mute/unmute/warn/unwarn/promote/demote/lock_links/unlock_links/lock_media/unlock_media","target_user_id":123}]
-- إذا كان يرد على رسالة شخص، استخدم ID الشخص المردود عليه كـ target_user_id
-- إذا لم يكن مشرفاً ولا المطور، أخبره بلطف أن هذه الصلاحية للمشرفين فقط
-
-إذا طلب شيء غير إداري (سؤال، محادثة، نكتة، معلومة):
-- أجب بشكل طبيعي وودود
-
-لا ترسل JSON إذا لم يطلب إجراء إداري.
-كن مختصراً في ردودك (أقل من 200 كلمة).`;
+إذا طلب إجراء إداري وكان مشرفاً/المطور:
+أضف في النهاية: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
+إذا لم يكن مشرفاً، أخبره بلطف.
+لا تضع JSON إذا لم يطلب إجراء إداري. كن مختصراً.`;
 
   try {
-    const LOVABLE_API_KEY = getEnv('LOVABLE_API_KEY');
-    
-    const aiResponse = await fetch(AI_GATEWAY_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: text },
-        ],
-      }),
-    });
+    const reply = await callAI(text, systemPrompt);
+    if (!reply) { await sendMsg(chatId, '🤖 فادي مش فاهم، جرب تاني! 🤔', undefined, messageId); return; }
 
-    if (!aiResponse.ok) {
-      if (aiResponse.status === 429) {
-        await sendMsg(chatId, '⏳ فادي مشغول شوية، جرب تاني كمان شوية!', undefined, messageId);
-        return;
-      }
-      throw new Error(`AI error: ${aiResponse.status}`);
-    }
-
-    const aiData = await aiResponse.json();
-    let reply = aiData.choices?.[0]?.message?.content || 'معلش، مش فاهم. جرب تاني! 🤔';
-
-    // Check for admin action in response
+    let cleanReply = reply;
     const actionMatch = reply.match(/\[ACTION:(\{.*?\})\]/);
     if (actionMatch) {
-      reply = reply.replace(/\[ACTION:\{.*?\}\]/, '').trim();
-      
+      cleanReply = reply.replace(/\[ACTION:\{.*?\}\]/, '').trim();
       try {
         const action = JSON.parse(actionMatch[1]);
         const targetId = action.target_user_id || replyMsg?.from?.id;
-        
         if (targetId && (isUserAdmin || isOwner)) {
-          const targetName = replyMsg?.from?.first_name || replyMsg?.from?.username || String(targetId);
-          const targetUsername = replyMsg?.from?.username || replyMsg?.from?.first_name || String(targetId);
-          
+          const tgtName = replyMsg?.from?.username || replyMsg?.from?.first_name || String(targetId);
           switch (action.type) {
-            case 'ban':
-              await tgCall('banChatMember', { chat_id: chatId, user_id: targetId });
-              await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId);
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'ban', 'عبر فادي AI');
-              break;
-            case 'kick':
-              await tgCall('banChatMember', { chat_id: chatId, user_id: targetId });
-              await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId });
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'kick', 'عبر فادي AI');
-              break;
-            case 'mute':
-              await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } });
-              await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId);
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'mute', 'عبر فادي AI');
-              break;
-            case 'unmute':
-              await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } });
-              await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', targetId).eq('chat_id', chatId);
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'unmute', 'عبر فادي AI');
-              break;
-            case 'warn': {
-              const { data: user } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetId).eq('chat_id', chatId).single();
-              const newW = (user?.warnings || 0) + 1;
-              await supabase.from('telegram_users').update({ warnings: newW }).eq('user_id', targetId).eq('chat_id', chatId);
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'warn', `تحذير ${newW}/3 عبر فادي AI`);
-              if (newW >= 3) {
-                await tgCall('banChatMember', { chat_id: chatId, user_id: targetId });
-                await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId });
-                reply += `\n\n⚠️ وصل لـ 3 تحذيرات وتم طرده تلقائياً!`;
-              }
-              break;
-            }
-            case 'unwarn': {
-              const { data: user } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetId).eq('chat_id', chatId).single();
-              const newW = Math.max(0, (user?.warnings || 0) - 1);
-              await supabase.from('telegram_users').update({ warnings: newW }).eq('user_id', targetId).eq('chat_id', chatId);
-              break;
-            }
-            case 'promote':
-              await tgCall('promoteChatMember', { chat_id: chatId, user_id: targetId, can_delete_messages: true, can_restrict_members: true, can_pin_messages: true, can_invite_users: true });
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'promote', 'عبر فادي AI');
-              break;
-            case 'demote':
-              await tgCall('promoteChatMember', { chat_id: chatId, user_id: targetId, can_delete_messages: false, can_restrict_members: false, can_pin_messages: false });
-              await logAction(supabase, chatId, userId, username, targetId, targetUsername, 'demote', 'عبر فادي AI');
-              break;
-            case 'lock_links':
-              await supabase.from('telegram_groups').update({ lock_links: true }).eq('chat_id', chatId);
-              break;
-            case 'unlock_links':
-              await supabase.from('telegram_groups').update({ lock_links: false }).eq('chat_id', chatId);
-              break;
-            case 'lock_media':
-              await supabase.from('telegram_groups').update({ lock_media: true }).eq('chat_id', chatId);
-              break;
-            case 'unlock_media':
-              await supabase.from('telegram_groups').update({ lock_media: false }).eq('chat_id', chatId);
-              break;
+            case 'ban': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'ban', 'عبر فادي AI'); break;
+            case 'kick': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'kick', 'عبر فادي AI'); break;
+            case 'mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'mute', 'عبر فادي AI'); break;
+            case 'unmute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', targetId).eq('chat_id', chatId); break;
+            case 'warn': { const { data: u } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetId).eq('chat_id', chatId).single(); const nw = (u?.warnings || 0) + 1; await supabase.from('telegram_users').update({ warnings: nw, total_warns: nw }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'warn', `${nw}/3 عبر فادي`); if (nw >= 3) { await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); cleanReply += '\n⚠️ وصل 3 تحذيرات وتم طرده!'; } break; }
           }
         }
-      } catch (e) {
-        console.error('AI action error:', e);
-      }
+      } catch (e) { console.error('AI action error:', e); }
     }
-
-    if (reply) {
-      await sendMsg(chatId, `🤖 <b>فادي:</b>\n${reply}`, undefined, messageId);
-    }
+    if (cleanReply) await sendMsg(chatId, `🤖 <b>فادي:</b>\n${cleanReply}`, undefined, messageId);
   } catch (e) {
     console.error('AI error:', e);
     await sendMsg(chatId, '🤖 فادي مش متاح دلوقتي، جرب تاني! 😅', undefined, messageId);
   }
 }
 
-// ==================== JOKES & QUIZ DATA ====================
+// ==================== FEATURE 3: TOXICITY FILTER ====================
+
+async function checkToxicity(text: string): Promise<{ toxic: boolean; reason: string }> {
+  try {
+    const result = await callAI(text, 'أنت فلتر محتوى. حلل الرسالة التالية. إذا كانت تحتوي على سب، شتم، تحرش، عنصرية، أو محتوى ضار، أجب بـ TOXIC:السبب. وإلا أجب بـ SAFE. فقط كلمة واحدة.');
+    if (result.startsWith('TOXIC')) return { toxic: true, reason: result.replace('TOXIC:', '').trim() };
+    return { toxic: false, reason: '' };
+  } catch { return { toxic: false, reason: '' }; }
+}
+
+// ==================== FEATURE 4: RAID DETECTION ====================
+
+const joinTracker: Record<number, number[]> = {};
+
+function detectRaid(chatId: number): boolean {
+  const now = Date.now();
+  if (!joinTracker[chatId]) joinTracker[chatId] = [];
+  joinTracker[chatId].push(now);
+  joinTracker[chatId] = joinTracker[chatId].filter(t => now - t < 60000);
+  return joinTracker[chatId].length >= 10; // 10 joins in 1 minute
+}
+
+// ==================== ENTERTAINMENT DATA ====================
 
 const jokes = [
   "واحد راح للدكتور قاله عندي مشكلة في عيني.. قاله إيه هي؟ قاله بشوف الناس صغيرة.. قاله طب ابعد عن البلكونة 😂",
@@ -316,45 +211,19 @@ const quizzes = [
   { q: "كم عدد ألوان قوس قزح؟", options: ["5", "6", "7", "8"], answer: 2 },
 ];
 
-const truths = [
-  "ما هو أكثر شيء محرج حصل لك؟",
-  "ما هو سرك الذي لا يعرفه أحد؟",
-  "من هو الشخص الذي تحبه أكثر في هذه المجموعة؟",
-  "ما هو أغرب حلم حلمت به؟",
-  "ما هو الشيء الذي تخاف منه؟",
-  "ما هو أكثر شيء تندم عليه؟",
-  "إيه أكتر حاجة بتعملها في السر؟",
-  "مين أكتر شخص بتغير منه؟",
-];
+const truths = ["ما هو أكثر شيء محرج حصل لك؟", "ما هو سرك الذي لا يعرفه أحد؟", "من هو الشخص الذي تحبه أكثر في هذه المجموعة؟", "ما هو أغرب حلم حلمت به؟", "ما هو الشيء الذي تخاف منه؟", "إيه أكتر حاجة بتعملها في السر؟", "مين أكتر شخص بتغير منه؟"];
+const dares = ["أرسل رسالة حب لآخر شخص كلمته 😂", "غير صورتك الشخصية لمدة ساعة", "أرسل رسالة صوتية وأنت تغني", "اكتب اسمك بالمقلوب واستخدمه لمدة يوم", "أرسل إيموجي واحد فقط لمدة 10 دقائق", "اعترف بحاجة مسويها وما قلتها لحد"];
+const hackMessages = ["⚡ جاري الاتصال بالسيرفرات...", "🔍 البحث عن الثغرات...", "💻 اختراق جدار الحماية...", "📡 الوصول لقاعدة البيانات...", "📸 تحميل الصور والملفات...", "🔓 فك تشفير كلمات المرور...", "🎯 تحليل البيانات الشخصية...", "☠️ زرع فيروس التجسس..."];
 
-const dares = [
-  "أرسل رسالة حب لآخر شخص كلمته 😂",
-  "غير صورتك الشخصية لمدة ساعة",
-  "أرسل رسالة صوتية وأنت تغني",
-  "اكتب اسمك بالمقلوب واستخدمه لمدة يوم",
-  "أرسل إيموجي واحد فقط لمدة 10 دقائق",
-  "اعترف بحاجة مسويها وما قلتها لحد",
-  "أرسل صورة أقدم صورة عندك في الجوال",
-  "اكتب بوست في المجموعة تمدح فيه أول شخص يرد عليك",
-];
+// ==================== TRUST LEVEL NAMES ====================
+const trustNames = ['🆕 جديد', '🌱 مبتدئ', '🌿 نشط', '🌳 موثوق', '⭐ خبير', '🏆 أسطوري'];
 
-const hackMessages = [
-  "⚡ جاري الاتصال بالسيرفرات...",
-  "🔍 البحث عن الثغرات...",
-  "💻 اختراق جدار الحماية...",
-  "📡 الوصول لقاعدة البيانات...",
-  "📸 تحميل الصور والملفات...",
-  "🔓 فك تشفير كلمات المرور...",
-  "🎯 تحليل البيانات الشخصية...",
-  "☠️ زرع فيروس التجسس...",
-];
-
-// ==================== COMMAND HANDLERS ====================
+// ==================== MAIN COMMAND HANDLER ====================
 
 async function handleCommand(supabase: any, update: any) {
   const msg = update.message;
   if (!msg) return;
-  
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const username = msg.from.username || msg.from.first_name || '';
@@ -362,92 +231,146 @@ async function handleCommand(supabase: any, update: any) {
   const replyMsg = msg.reply_to_message;
   const targetUser = replyMsg?.from;
 
-  // Ensure group and user
   if (msg.chat.type !== 'private') {
     await ensureGroup(supabase, chatId, msg.chat.title);
     await ensureUser(supabase, userId, chatId, msg.from.username, msg.from.first_name, msg.from.last_name);
   }
 
-  // New member welcome + notify developer
+  // ==================== NEW MEMBER HANDLING ====================
   if (msg.new_chat_members) {
-    const { data: group } = await supabase.from('telegram_groups').select('welcome_message, title').eq('chat_id', chatId).single();
-    const welcome = group?.welcome_message || 'مرحباً بك في المجموعة! 👋';
+    const { data: group } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
     const groupTitle = group?.title || msg.chat.title || 'مجموعة';
-    
+
+    // FEATURE 4: Raid detection
+    if (group?.raid_protection) {
+      if (detectRaid(chatId)) {
+        await sendMsg(chatId, '🚨 <b>تنبيه غارة!</b>\n\nتم رصد انضمام جماعي مشبوه. يتم تفعيل الحماية التلقائية...');
+        await notifyDeveloper(`🚨 <b>غارة محتملة!</b>\nالمجموعة: ${groupTitle}\nعدد الانضمامات: 10+ في دقيقة`);
+        return;
+      }
+    }
+
     for (const member of msg.new_chat_members) {
       const name = member.first_name || member.username || 'عضو جديد';
-      await sendMsg(chatId, `${welcome}\n\nأهلاً <b>${name}</b>! 🎉`);
       await ensureUser(supabase, member.id, chatId, member.username, member.first_name, member.last_name);
-      
-      // 🔔 Notify developer about new member
-      await notifyDeveloper(
-        `🆕 <b>عضو جديد!</b>\n\n` +
-        `👤 الاسم: <b>${name}</b>\n` +
-        `🔗 المعرف: ${member.username ? `@${member.username}` : 'بدون'}\n` +
-        `🆔 ID: <code>${member.id}</code>\n` +
-        `💬 المجموعة: <b>${groupTitle}</b>\n` +
-        `📅 الوقت: ${new Date().toLocaleString('ar')}`
-      );
+
+      // FEATURE 16: CAPTCHA for new members
+      if (group?.captcha_enabled) {
+        const num1 = Math.floor(Math.random() * 10) + 1;
+        const num2 = Math.floor(Math.random() * 10) + 1;
+        const answer = num1 + num2;
+        await tgCall('restrictChatMember', { chat_id: chatId, user_id: member.id, permissions: { can_send_messages: false } });
+        await sendMsg(chatId, `🔒 <b>تحقق أمني لـ ${name}</b>\n\nأجب على السؤال للمتابعة:\n❓ كم يساوي <b>${num1} + ${num2}</b>؟`, {
+          inline_keyboard: [
+            [{ text: `${answer - 1}`, callback_data: `captcha_${member.id}_wrong` }, { text: `${answer}`, callback_data: `captcha_${member.id}_correct` }, { text: `${answer + 1}`, callback_data: `captcha_${member.id}_wrong` }],
+          ],
+        });
+      } else {
+        const welcome = group?.welcome_message || 'مرحباً بك في المجموعة! 👋';
+        await sendMsg(chatId, `${welcome}\n\nأهلاً <b>${name}</b>! 🎉`);
+      }
+
+      // Notify developer
+      await notifyDeveloper(`🆕 <b>عضو جديد!</b>\n👤 ${name}\n🔗 ${member.username ? `@${member.username}` : 'بدون'}\n🆔 <code>${member.id}</code>\n💬 ${groupTitle}`);
     }
     return;
   }
 
-  // Left member notify
+  // Left member
   if (msg.left_chat_member) {
-    const member = msg.left_chat_member;
-    const name = member.first_name || member.username || 'عضو';
-    const groupTitle = msg.chat.title || 'مجموعة';
-    await notifyDeveloper(
-      `🚪 <b>عضو غادر!</b>\n\n` +
-      `👤 الاسم: <b>${name}</b>\n` +
-      `🔗 المعرف: ${member.username ? `@${member.username}` : 'بدون'}\n` +
-      `💬 المجموعة: <b>${groupTitle}</b>`
-    );
+    const m = msg.left_chat_member;
+    await notifyDeveloper(`🚪 <b>عضو غادر!</b>\n👤 ${m.first_name || m.username || 'عضو'}\n💬 ${msg.chat.title || 'مجموعة'}`);
     return;
   }
 
-  // Check spam / links / media / stickers / files locks
+  // ==================== PRE-COMMAND CHECKS ====================
   if (msg.chat.type !== 'private') {
     const { data: group } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
     if (group) {
       const admin = await isAdmin(chatId, userId);
       const dev = isDeveloper(userId);
-      
+
+      // FEATURE 10: Night guard
+      if (group.night_mode_start !== null && group.night_mode_end !== null && !admin && !dev) {
+        const hour = new Date().getUTCHours();
+        const isNight = group.night_mode_start > group.night_mode_end
+          ? (hour >= group.night_mode_start || hour < group.night_mode_end)
+          : (hour >= group.night_mode_start && hour < group.night_mode_end);
+        if (isNight) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          return;
+        }
+      }
+
+      // Content locks
       if (group.lock_links && !admin && !dev && msg.entities?.some((e: any) => e.type === 'url' || e.type === 'text_link')) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-        await sendMsg(chatId, `⚠️ @${username} الروابط ممنوعة في هذه المجموعة!`);
+        await sendMsg(chatId, `⚠️ @${username} الروابط ممنوعة!`);
         return;
       }
-      if (group.lock_media && !admin && !dev && (msg.photo || msg.video || msg.animation || msg.document?.mime_type?.startsWith('video'))) {
+      if (group.lock_media && !admin && !dev && (msg.photo || msg.video || msg.animation)) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-        await sendMsg(chatId, `⚠️ @${username} الوسائط ممنوعة في هذه المجموعة!`);
         return;
       }
       if (group.lock_stickers && !admin && !dev && msg.sticker) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-        await sendMsg(chatId, `⚠️ @${username} الملصقات ممنوعة في هذه المجموعة!`);
         return;
       }
       if (group.lock_files && !admin && !dev && msg.document) {
         try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-        await sendMsg(chatId, `⚠️ @${username} الملفات ممنوعة في هذه المجموعة!`);
         return;
       }
+
+      // FEATURE 3: Toxicity filter
+      if (group.toxicity_filter && text && !admin && !dev) {
+        const { toxic, reason } = await checkToxicity(text);
+        if (toxic) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await sendMsg(chatId, `⚠️ <b>${username}</b> تم حذف رسالتك لاحتوائها على محتوى غير لائق.\nالسبب: ${reason}`);
+          await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: -5 });
+          return;
+        }
+      }
+
+      // FEATURE 15: Auto FAQ - check if message matches any FAQ
+      if (group.auto_faq_enabled && text && !text.startsWith('/')) {
+        const { data: faqs } = await supabase.from('telegram_faq').select('*').eq('chat_id', chatId);
+        if (faqs) {
+          const textLower = text.toLowerCase();
+          const match = faqs.find((f: any) => {
+            if (f.keywords?.some((k: string) => textLower.includes(k.toLowerCase()))) return true;
+            if (textLower.includes(f.question.toLowerCase())) return true;
+            return false;
+          });
+          if (match) {
+            await sendMsg(chatId, `💡 <b>إجابة تلقائية:</b>\n\n${match.answer}`, undefined, msg.message_id);
+            await supabase.from('telegram_faq').update({ usage_count: (match.usage_count || 0) + 1 }).eq('id', match.id);
+          }
+        }
+      }
     }
+
+    // Track activity
+    await supabase.rpc('increment_message_count', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
+    await supabase.rpc('update_trust_level', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
   }
 
-  // Check if message mentions "فادي" for AI
-  const fadiMentioned = text.includes('فادي') || text.includes('يا فادي') || text.includes('Fadi') || text.includes('fadi');
-  
-  if (fadiMentioned && msg.chat.type !== 'private') {
+  // AI mention
+  if ((text.includes('فادي') || text.includes('Fadi') || text.includes('fadi')) && msg.chat.type !== 'private') {
     await handleAI(supabase, chatId, userId, username, text, replyMsg, msg.message_id);
     return;
   }
 
-  // Commands
   if (!text.startsWith('/')) {
     if (msg.chat.type !== 'private') {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
+      // Give 1 coin per message
+      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
+      // Give 1 reputation per 5 messages
+      const { data: usr } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
+      if (usr && usr.message_count % 5 === 0) {
+        await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
+      }
     }
     return;
   }
@@ -458,428 +381,547 @@ async function handleCommand(supabase: any, update: any) {
   const command = cmd.toLowerCase().replace(`@${botUsername}`, '');
 
   switch (command) {
+    // ==================== BASIC COMMANDS ====================
     case '/start':
       if (msg.chat.type === 'private') {
-        if (args[0]?.startsWith('whisper_')) break;
-        await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات</b>\n\n✨ أقدر أساعدك في إدارة مجموعتك بالكامل\n\n🧠 يمكنك التحدث مع <b>فادي</b> (الذكاء الاصطناعي) في المجموعة بذكر اسمه\n\nمثال: "يا فادي احظر هذا الشخص"\n\n📋 اكتب /help لعرض جميع الأوامر`, {
+        await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات الأذكى</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي (فادي)\n💰 نظام اقتصادي (عملات + متجر)\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n⚖️ نظام محكمة ديموقراطي\n\n📋 اكتب /help للأوامر`, {
           inline_keyboard: [
             [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
             [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
           ],
         });
       } else {
-        await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات</b>\n\n🧠 تكلم مع <b>فادي</b> للإدارة بالذكاء الاصطناعي\n📋 اكتب /help للأوامر`, {
-          inline_keyboard: [
-            [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
-          ],
-        });
+        await sendMsg(chatId, `🤖 <b>أنا جاهز!</b> 🧠 تكلم مع <b>فادي</b> أو اكتب /help`, { inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       }
       break;
 
     case '/help':
-      await sendMsg(chatId, `📋 <b>قائمة الأوامر الكاملة:</b>\n\n🤖 <b>الذكاء الاصطناعي:</b>\nاذكر "فادي" في رسالتك وهو هيفهم ويتصرف\nمثال: "يا فادي احظر" | "يا فادي نكتة"\n\n👑 <b>الإدارة:</b>\n/ban - حظر عضو (بالرد)\n/unban - إلغاء حظر\n/kick - طرد عضو\n/mute - كتم عضو\n/unmute - إلغاء كتم\n/warn - تحذير (3 = طرد)\n/unwarn - إزالة تحذير\n/promote - ترقية لمشرف\n/demote - تخفيض مشرف\n\n🔒 <b>الحماية:</b>\n/lock links|media|stickers|files\n/unlock links|media|stickers|files\n/antispam on|off\n/setwelcome - رسالة ترحيب\n\n📢 <b>النداء:</b>\n/tagall - نداء جميع الأعضاء\n/all - نداء سريع\n\n🎮 <b>الترفيه:</b>\n/quiz - أسئلة\n/game - تخمين رقم\n/truth - حقيقة\n/dare - تحدي\n/joke - نكتة\n/hack - اختراق وهمي\n/whisper - همسة\n/points - نقاطك\n/top - أعلى النقاط\n/random - عضو عشوائي\n/roll - رمي نرد\n/flip - قلب عملة\n\nℹ️ <b>معلومات:</b>\n/id - معرفك\n/info - معلومات عضو\n/rules - قوانين المجموعة\n/setrules - تعيين القوانين\n/report - إبلاغ عن مخالفة\n/pin - تثبيت رسالة\n/unpin - إلغاء تثبيت\n/dev - التواصل مع المطور`, {
-        inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]],
-      });
+      await sendMsg(chatId, `📋 <b>الأوامر الكاملة:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /nightmode /captcha /toxicity /slowmode\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court /appeal\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /whisper /roll /flip /random\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
       break;
 
-    case '/dev':
-    case '/developer':
-    case '/owner':
-      await sendMsg(chatId, `👨‍💻 <b>المطور:</b>\n\nللتواصل مع مطور البوت:`, {
-        inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]],
-      });
+    case '/dev': case '/developer': case '/owner':
+      await sendMsg(chatId, `👨‍💻 <b>المطور:</b>`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       break;
 
-    case '/id':
-      if (targetUser) {
-        await sendMsg(chatId, `🆔 معرف <b>${targetUser.first_name || targetUser.username}</b>: <code>${targetUser.id}</code>`);
-      } else {
-        await sendMsg(chatId, `🆔 معرفك: <code>${userId}</code>\n💬 معرف المجموعة: <code>${chatId}</code>`);
+    // ==================== FEATURE 5: ECONOMY - DAILY REWARD ====================
+    case '/daily': {
+      const { data: user } = await supabase.from('telegram_users').select('last_daily, daily_streak, coins').eq('user_id', userId).eq('chat_id', chatId).single();
+      if (!user) break;
+      const now = new Date();
+      const lastDaily = user.last_daily ? new Date(user.last_daily) : null;
+      const daysDiff = lastDaily ? Math.floor((now.getTime() - lastDaily.getTime()) / 86400000) : 999;
+
+      if (daysDiff < 1) {
+        await sendMsg(chatId, `⏰ لقد حصلت على مكافأتك اليومية بالفعل! عد غداً.`);
+        break;
       }
+
+      const streak = daysDiff <= 2 ? (user.daily_streak || 0) + 1 : 1;
+      const reward = 50 + (streak * 10); // More for streaks
+      await supabase.from('telegram_users').update({
+        coins: (user.coins || 0) + reward,
+        daily_streak: streak,
+        last_daily: now.toISOString(),
+      }).eq('user_id', userId).eq('chat_id', chatId);
+
+      await sendMsg(chatId, `🎁 <b>مكافأة يومية!</b>\n\n💰 حصلت على <b>${reward}</b> عملة\n🔥 سلسلة الأيام: <b>${streak}</b>\n💵 رصيدك: <b>${(user.coins || 0) + reward}</b> عملة`);
+      break;
+    }
+
+    // ==================== FEATURE 6: COINS/WALLET ====================
+    case '/coins': case '/wallet': case '/balance': {
+      const { data: user } = await supabase.from('telegram_users').select('coins, daily_streak').eq('user_id', userId).eq('chat_id', chatId).single();
+      await sendMsg(chatId, `💰 <b>محفظتك:</b>\n\n💵 العملات: <b>${user?.coins || 0}</b>\n🔥 سلسلة الأيام: <b>${user?.daily_streak || 0}</b>\n\n💡 اكسب عملات من: الرسائل، التحديات، /daily`);
+      break;
+    }
+
+    // ==================== FEATURE 7: TRANSFER COINS ====================
+    case '/transfer': case '/gift': {
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص المراد التحويل إليه'); break; }
+      const amount = parseInt(args[0]) || 0;
+      if (amount <= 0) { await sendMsg(chatId, '❌ حدد المبلغ: /transfer 100'); break; }
+      const { data: sender } = await supabase.from('telegram_users').select('coins').eq('user_id', userId).eq('chat_id', chatId).single();
+      if (!sender || (sender.coins || 0) < amount) { await sendMsg(chatId, `❌ رصيدك غير كافي (${sender?.coins || 0} عملة)`); break; }
+      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: -amount });
+      await supabase.rpc('increment_coins', { p_user_id: targetUser.id, p_chat_id: chatId, p_amount: amount });
+      await sendMsg(chatId, `💸 <b>${username}</b> حوّل <b>${amount}</b> عملة لـ <b>${targetUser.first_name || targetUser.username}</b> ✅`);
+      break;
+    }
+
+    // ==================== FEATURE 8: SHOP ====================
+    case '/shop': {
+      const { data: items } = await supabase.from('telegram_shop_items').select('*').eq('chat_id', chatId).eq('is_active', true);
+      if (!items || items.length === 0) { await sendMsg(chatId, '🏪 المتجر فارغ حالياً!\n\nالمشرفون يمكنهم إضافة عناصر من لوحة التحكم'); break; }
+      const list = items.map((item: any, i: number) => `${i + 1}. <b>${item.name}</b> - ${item.price} 💰\n   ${item.description || ''}`).join('\n\n');
+      await sendMsg(chatId, `🏪 <b>المتجر:</b>\n\n${list}\n\n💡 للشراء: /buy [رقم العنصر]`);
+      break;
+    }
+
+    case '/buy': {
+      const itemIndex = parseInt(args[0]) - 1;
+      const { data: items } = await supabase.from('telegram_shop_items').select('*').eq('chat_id', chatId).eq('is_active', true).order('created_at');
+      if (!items || !items[itemIndex]) { await sendMsg(chatId, '❌ رقم عنصر غير صحيح. اكتب /shop لعرض المتجر'); break; }
+      const item = items[itemIndex];
+      const { data: buyer } = await supabase.from('telegram_users').select('coins').eq('user_id', userId).eq('chat_id', chatId).single();
+      if (!buyer || (buyer.coins || 0) < item.price) { await sendMsg(chatId, `❌ رصيدك غير كافي! تحتاج ${item.price} عملة (لديك ${buyer?.coins || 0})`); break; }
+      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: -item.price });
+      await supabase.from('telegram_purchases').insert({ chat_id: chatId, user_id: userId, item_id: item.id, item_name: item.name, price: item.price });
+      if (item.stock > 0) await supabase.from('telegram_shop_items').update({ stock: item.stock - 1 }).eq('id', item.id);
+      await sendMsg(chatId, `🎉 <b>${username}</b> اشترى <b>${item.name}</b> بـ ${item.price} 💰`);
+      break;
+    }
+
+    // ==================== FEATURE 9: PROFILE & TRUST ====================
+    case '/profile': {
+      const infoTarget = targetUser || msg.from;
+      const { data: u } = await supabase.from('telegram_users').select('*').eq('user_id', infoTarget.id).eq('chat_id', chatId).single();
+      if (!u) { await sendMsg(chatId, '❌ لم يتم العثور على بيانات'); break; }
+      const memberData = await tgCall('getChatMember', { chat_id: chatId, user_id: infoTarget.id }).catch(() => null);
+      await sendMsg(chatId, `📊 <b>بروفايل ${infoTarget.first_name || infoTarget.username}:</b>\n\n👤 الاسم: <b>${infoTarget.first_name || ''} ${infoTarget.last_name || ''}</b>\n🔗 @${infoTarget.username || 'بدون'}\n🆔 <code>${infoTarget.id}</code>\n📊 ${memberData?.result?.status === 'creator' ? '👑 مالك' : memberData?.result?.status === 'administrator' ? '⭐ مشرف' : '👤 عضو'}\n\n💰 العملات: <b>${u.coins || 0}</b>\n🏆 النقاط: <b>${u.points || 0}</b> | المستوى: <b>${u.level || 1}</b>\n⭐ السمعة: <b>${u.reputation || 0}</b>\n🛡️ الثقة: ${trustNames[u.trust_level || 0]}\n💬 الرسائل: <b>${u.message_count || 0}</b>\n⚠️ التحذيرات: <b>${u.warnings || 0}/3</b>\n🔥 سلسلة الأيام: <b>${u.daily_streak || 0}</b>`);
+      break;
+    }
+
+    case '/trust': {
+      const { data: u } = await supabase.from('telegram_users').select('trust_level, message_count, reputation').eq('user_id', userId).eq('chat_id', chatId).single();
+      const tl = u?.trust_level || 0;
+      const nextReqs = [
+        'أرسل 10 رسائل + يوم واحد',
+        '50 رسالة + أسبوع + 5 سمعة',
+        '200 رسالة + شهر + 20 سمعة',
+        '500 رسالة + شهرين + 50 سمعة',
+        '1000 رسالة + 3 شهور + 100 سمعة',
+        'أنت في أعلى مستوى! 🏆',
+      ];
+      await sendMsg(chatId, `🛡️ <b>مستوى الثقة:</b>\n\n${trustNames[tl]}\n\n📈 للمستوى التالي:\n${nextReqs[Math.min(tl, 5)]}\n\n💬 رسائلك: ${u?.message_count || 0}\n⭐ سمعتك: ${u?.reputation || 0}`);
+      break;
+    }
+
+    case '/reputation': case '/rep': {
+      if (targetUser && targetUser.id !== userId) {
+        // Give +1 rep (once per target per day handled by unique constraint later)
+        await supabase.rpc('update_reputation', { p_user_id: targetUser.id, p_chat_id: chatId, p_amount: 1 });
+        await sendMsg(chatId, `⬆️ <b>${username}</b> أعطى +1 سمعة لـ <b>${targetUser.first_name || targetUser.username}</b> ⭐`);
+      } else {
+        const { data: u } = await supabase.from('telegram_users').select('reputation').eq('user_id', userId).eq('chat_id', chatId).single();
+        await sendMsg(chatId, `⭐ سمعتك: <b>${u?.reputation || 0}</b>\n\n💡 رد على رسالة شخص واكتب /rep لإعطائه سمعة`);
+      }
+      break;
+    }
+
+    // ==================== FEATURE 11: COURT SYSTEM ====================
+    case '/court': {
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص المراد تقديمه للمحكمة'); break; }
+      const reason = args.join(' ') || 'بدون سبب محدد';
+      const expiresAt = new Date(Date.now() + 3600000).toISOString(); // 1 hour
+      const { data: caseData } = await supabase.from('telegram_court_cases').insert({
+        chat_id: chatId, accused_user_id: targetUser.id, accused_username: targetUser.username || targetUser.first_name,
+        accuser_user_id: userId, accuser_username: username, reason, expires_at: expiresAt,
+      }).select().single();
+
+      if (caseData) {
+        await sendMsg(chatId, `⚖️ <b>محكمة الجروب!</b>\n\n🔴 المتهم: <b>${targetUser.first_name || targetUser.username}</b>\n📝 التهمة: ${reason}\n👤 المدعي: <b>${username}</b>\n\n⏰ التصويت مفتوح لمدة ساعة\n✅ = مذنب | ❌ = بريء`, {
+          inline_keyboard: [
+            [{ text: '✅ مذنب', callback_data: `court_${caseData.id}_guilty` }, { text: '❌ بريء', callback_data: `court_${caseData.id}_innocent` }],
+          ],
+        });
+      }
+      break;
+    }
+
+    // ==================== FEATURE 12: TICKET SYSTEM ====================
+    case '/ticket': {
+      const subject = args.join(' ');
+      if (!subject) { await sendMsg(chatId, '❌ اكتب موضوع التذكرة: /ticket مشكلة في الصلاحيات'); break; }
+      await supabase.from('telegram_tickets').insert({ chat_id: chatId, user_id: userId, username, subject });
+      await sendMsg(chatId, `🎫 <b>تم فتح تذكرة!</b>\n\n📝 الموضوع: ${subject}\n👤 من: ${username}\n📊 الحالة: مفتوحة\n\nسيتم الرد من المشرفين قريباً`);
+      await notifyDeveloper(`🎫 <b>تذكرة جديدة!</b>\nمن: ${username}\nالمجموعة: ${msg.chat.title}\nالموضوع: ${subject}`);
+      break;
+    }
+
+    // ==================== FEATURE 13: FAQ MANAGEMENT ====================
+    case '/addfaq': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const parts = args.join(' ').split('|');
+      if (parts.length < 2) { await sendMsg(chatId, '❌ الصيغة: /addfaq السؤال | الإجابة | كلمات,مفتاحية'); break; }
+      const question = parts[0].trim();
+      const answer = parts[1].trim();
+      const keywords = parts[2]?.trim().split(',').map(k => k.trim()) || [];
+      await supabase.from('telegram_faq').insert({ chat_id: chatId, question, answer, keywords, created_by: userId });
+      await sendMsg(chatId, `✅ تم إضافة FAQ!\n❓ ${question}\n💡 ${answer}`);
+      break;
+    }
+
+    case '/faq': {
+      const { data: faqs } = await supabase.from('telegram_faq').select('*').eq('chat_id', chatId).order('usage_count', { ascending: false }).limit(10);
+      if (!faqs || faqs.length === 0) { await sendMsg(chatId, '📋 لا توجد أسئلة شائعة بعد\n\nالمشرفون يمكنهم إضافتها: /addfaq'); break; }
+      const list = faqs.map((f: any, i: number) => `${i + 1}. <b>${f.question}</b>\n   ${f.answer}`).join('\n\n');
+      await sendMsg(chatId, `📋 <b>الأسئلة الشائعة:</b>\n\n${list}`);
+      break;
+    }
+
+    // ==================== FEATURE 14: SAVE MESSAGES ====================
+    case '/save': {
+      if (!replyMsg) { await sendMsg(chatId, '❌ رد على الرسالة المراد حفظها'); break; }
+      const tag = args[0] || 'general';
+      await supabase.from('telegram_saved_messages').insert({ chat_id: chatId, message_id: replyMsg.message_id, saved_by: userId, text: replyMsg.text || '(بدون نص)', tag });
+      await sendMsg(chatId, `📌 تم حفظ الرسالة بتاج: <b>#${tag}</b>`);
+      break;
+    }
+
+    case '/saved': {
+      const tag = args[0];
+      let query = supabase.from('telegram_saved_messages').select('*').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(10);
+      if (tag) query = query.eq('tag', tag);
+      const { data: saved } = await query;
+      if (!saved || saved.length === 0) { await sendMsg(chatId, '📌 لا توجد رسائل محفوظة'); break; }
+      const list = saved.map((s: any) => `#${s.tag} | ${s.text?.substring(0, 50) || '...'}`).join('\n');
+      await sendMsg(chatId, `📌 <b>الرسائل المحفوظة:</b>\n\n${list}`);
+      break;
+    }
+
+    // ==================== FEATURE 15: SCHEDULE MESSAGES ====================
+    case '/schedule': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      // Format: /schedule 30m رسالة  OR /schedule 2h رسالة
+      const timeStr = args[0];
+      const message = args.slice(1).join(' ');
+      if (!timeStr || !message) { await sendMsg(chatId, '❌ الصيغة: /schedule 30m رسالة الجدولة\nالوحدات: m (دقائق), h (ساعات)'); break; }
+      const unit = timeStr.slice(-1);
+      const value = parseInt(timeStr.slice(0, -1));
+      if (isNaN(value)) { await sendMsg(chatId, '❌ وقت غير صحيح'); break; }
+      const ms = unit === 'h' ? value * 3600000 : value * 60000;
+      const scheduledAt = new Date(Date.now() + ms).toISOString();
+      await supabase.from('telegram_scheduled_messages').insert({ chat_id: chatId, message, scheduled_at: scheduledAt, created_by: userId });
+      await sendMsg(chatId, `⏰ تم جدولة الرسالة بعد ${value}${unit === 'h' ? ' ساعة' : ' دقيقة'}`);
+      break;
+    }
+
+    // ==================== FEATURE 16: CAPTCHA TOGGLE ====================
+    case '/captcha': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const on = args[0] === 'on';
+      await supabase.from('telegram_groups').update({ captcha_enabled: on }).eq('chat_id', chatId);
+      await sendMsg(chatId, on ? '🔒 تم تفعيل نظام الكابتشا للأعضاء الجدد' : '🔓 تم إيقاف نظام الكابتشا');
+      break;
+    }
+
+    // ==================== FEATURE 17: NIGHT MODE ====================
+    case '/nightmode': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (args[0] === 'off') {
+        await supabase.from('telegram_groups').update({ night_mode_start: null, night_mode_end: null }).eq('chat_id', chatId);
+        await sendMsg(chatId, '🌙 تم إيقاف الوضع الليلي');
+      } else {
+        const start = parseInt(args[0]) || 23;
+        const end = parseInt(args[1]) || 6;
+        await supabase.from('telegram_groups').update({ night_mode_start: start, night_mode_end: end }).eq('chat_id', chatId);
+        await sendMsg(chatId, `🌙 تم تفعيل الوضع الليلي من الساعة <b>${start}:00</b> إلى <b>${end}:00</b> UTC\n\nسيتم حذف الرسائل تلقائياً خلال هذه الفترة (عدا المشرفين)`);
+      }
+      break;
+    }
+
+    // ==================== FEATURE 18: TOXICITY TOGGLE ====================
+    case '/toxicity': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const on = args[0] === 'on';
+      await supabase.from('telegram_groups').update({ toxicity_filter: on }).eq('chat_id', chatId);
+      await sendMsg(chatId, on ? '🛡️ تم تفعيل فلتر المحتوى السام بالذكاء الاصطناعي' : '🛡️ تم إيقاف فلتر المحتوى السام');
+      break;
+    }
+
+    // ==================== FEATURE 19: SLOW MODE ====================
+    case '/slowmode': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const seconds = parseInt(args[0]) || 0;
+      try {
+        await tgCall('setChatSlowMode' as any, { chat_id: chatId, slow_mode_delay: seconds });
+        await supabase.from('telegram_groups').update({ slow_mode_seconds: seconds }).eq('chat_id', chatId);
+        await sendMsg(chatId, seconds > 0 ? `🐌 تم تفعيل الوضع البطيء: رسالة كل <b>${seconds}</b> ثانية` : '🐌 تم إيقاف الوضع البطيء');
+      } catch { await sendMsg(chatId, '❌ فشل تعيين الوضع البطيء'); }
+      break;
+    }
+
+    // ==================== FEATURE 20: DAILY CHALLENGE ====================
+    case '/challenge': {
+      const today = new Date().toISOString().split('T')[0];
+      let { data: challenge } = await supabase.from('telegram_challenges').select('*').eq('chat_id', chatId).eq('active_date', today).eq('is_active', true).single();
+
+      if (!challenge) {
+        // Auto-create daily challenge
+        const challenges = [
+          { title: 'مرسال اليوم 📨', description: 'أرسل 20 رسالة اليوم', challenge_type: 'message_count', target_value: 20, reward_coins: 100, reward_points: 30 },
+          { title: 'الودود 💕', description: 'أعط سمعة لـ 3 أعضاء', challenge_type: 'give_rep', target_value: 3, reward_coins: 75, reward_points: 25 },
+          { title: 'العالم 🧠', description: 'أجب على 3 أسئلة Quiz صح', challenge_type: 'quiz_correct', target_value: 3, reward_coins: 150, reward_points: 50 },
+          { title: 'المتفاعل 🎯', description: 'أرسل 50 رسالة اليوم', challenge_type: 'message_count', target_value: 50, reward_coins: 200, reward_points: 60 },
+          { title: 'الكريم 💸', description: 'حوّل عملات لـ 2 أعضاء', challenge_type: 'transfers', target_value: 2, reward_coins: 80, reward_points: 20 },
+        ];
+        const random = challenges[Math.floor(Math.random() * challenges.length)];
+        const { data: newChallenge } = await supabase.from('telegram_challenges').insert({
+          chat_id: chatId, ...random, active_date: today,
+        }).select().single();
+        challenge = newChallenge;
+      }
+
+      if (challenge) {
+        await sendMsg(chatId, `🏆 <b>تحدي اليوم: ${challenge.title}</b>\n\n📝 ${challenge.description}\n🎯 الهدف: ${challenge.target_value}\n💰 المكافأة: ${challenge.reward_coins} عملة + ${challenge.reward_points} نقطة\n\n💡 أكمل التحدي واكتب /mychallenges لجمع المكافأة`);
+      }
+      break;
+    }
+
+    case '/mychallenges': {
+      const today = new Date().toISOString().split('T')[0];
+      const { data: challenge } = await supabase.from('telegram_challenges').select('*').eq('chat_id', chatId).eq('active_date', today).eq('is_active', true).single();
+      if (!challenge) { await sendMsg(chatId, '❌ لا يوجد تحدي نشط اليوم. اكتب /challenge لبدء واحد'); break; }
+
+      // Check if already completed
+      const { data: existing } = await supabase.from('telegram_challenge_completions').select('id').eq('challenge_id', challenge.id).eq('user_id', userId).single();
+      if (existing) { await sendMsg(chatId, '✅ لقد أكملت تحدي اليوم بالفعل!'); break; }
+
+      // Check progress
+      const { data: user } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
+      // Simple check - award if they've been active enough
+      const progress = user?.message_count || 0;
+      if (progress >= challenge.target_value) {
+        await supabase.from('telegram_challenge_completions').insert({ challenge_id: challenge.id, chat_id: chatId, user_id: userId });
+        await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: challenge.reward_coins });
+        await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId });
+        await sendMsg(chatId, `🎉 <b>${username} أكمل التحدي!</b>\n\n🏆 ${challenge.title}\n💰 +${challenge.reward_coins} عملة\n🏅 +${challenge.reward_points} نقطة`);
+      } else {
+        await sendMsg(chatId, `📊 <b>تقدمك في التحدي:</b>\n\n🏆 ${challenge.title}\n📈 التقدم: ${progress}/${challenge.target_value}\n\nاستمر! 💪`);
+      }
+      break;
+    }
+
+    // ==================== FEATURE: STATS ====================
+    case '/stats': {
+      if (msg.chat.type === 'private') break;
+      const { data: members } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId);
+      if (!members) break;
+      const total = members.length;
+      const banned = members.filter((m: any) => m.is_banned).length;
+      const muted = members.filter((m: any) => m.is_muted).length;
+      const totalMsgs = members.reduce((s: number, m: any) => s + (m.message_count || 0), 0);
+      const totalCoins = members.reduce((s: number, m: any) => s + (m.coins || 0), 0);
+      let totalCount = 0;
+      try { const c = await tgCall('getChatMembersCount', { chat_id: chatId }); totalCount = c.result || 0; } catch {}
+
+      await sendMsg(chatId, `📊 <b>إحصائيات المجموعة:</b>\n\n👥 الأعضاء: <b>${totalCount || total}</b> (مسجل: ${total})\n🚫 محظور: <b>${banned}</b>\n🔇 مكتوم: <b>${muted}</b>\n💬 مجموع الرسائل: <b>${totalMsgs}</b>\n💰 مجموع العملات: <b>${totalCoins}</b>`);
+      break;
+    }
+
+    // ==================== ADMIN COMMANDS ====================
+    case '/id':
+      if (targetUser) await sendMsg(chatId, `🆔 <b>${targetUser.first_name || targetUser.username}</b>: <code>${targetUser.id}</code>`);
+      else await sendMsg(chatId, `🆔 معرفك: <code>${userId}</code>\n💬 المجموعة: <code>${chatId}</code>`);
       break;
 
     case '/info':
-      {
-        const infoTarget = targetUser || msg.from;
-        const { data: userData } = await supabase.from('telegram_users').select('*').eq('user_id', infoTarget.id).eq('chat_id', chatId).single();
-        const memberData = await tgCall('getChatMember', { chat_id: chatId, user_id: infoTarget.id }).catch(() => null);
-        
-        await sendMsg(chatId, `📊 <b>معلومات العضو:</b>\n\n👤 الاسم: <b>${infoTarget.first_name || ''} ${infoTarget.last_name || ''}</b>\n🔗 المعرف: @${infoTarget.username || 'بدون'}\n🆔 ID: <code>${infoTarget.id}</code>\n📊 المنصب: ${memberData?.result?.status === 'creator' ? '👑 مالك' : memberData?.result?.status === 'administrator' ? '⭐ مشرف' : '👤 عضو'}\n🏆 النقاط: ${userData?.points || 0}\n⭐ المستوى: ${userData?.level || 1}\n⚠️ التحذيرات: ${userData?.warnings || 0}/3\n${userData?.is_banned ? '🚫 محظور' : ''}${userData?.is_muted ? '🔇 مكتوم' : ''}`);
+      if (targetUser || msg.from) {
+        const t = targetUser || msg.from;
+        const { data: u } = await supabase.from('telegram_users').select('*').eq('user_id', t.id).eq('chat_id', chatId).single();
+        await sendMsg(chatId, `📊 <b>${t.first_name || t.username}:</b>\n🆔 <code>${t.id}</code> | 🏆 ${u?.points || 0} نقطة | ⭐ ${u?.reputation || 0} سمعة | 💰 ${u?.coins || 0} | ⚠️ ${u?.warnings || 0}/3 | 🛡️ ${trustNames[u?.trust_level || 0]}`);
       }
       break;
 
-    case '/tagall':
-    case '/all':
-    case '/everyone':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) {
-        await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط');
-        break;
-      }
+    case '/tagall': case '/all': case '/everyone':
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
       await tagAllMembers(supabase, chatId, username);
       break;
 
-    case '/ban':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو المراد حظره'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
+    case '/ban': case '/unban': case '/kick': case '/mute': case '/unmute': case '/warn': case '/unwarn': case '/promote': case '/demote': {
+      if (!targetUser && command !== '/unban') { await sendMsg(chatId, '❌ رد على رسالة العضو'); break; }
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const tgt = targetUser!;
+      const tgtName = tgt.first_name || tgt.username || String(tgt.id);
       try {
-        await tgCall('banChatMember', { chat_id: chatId, user_id: targetUser.id });
-        await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'ban');
-        await sendMsg(chatId, `🚫 تم حظر <b>${targetUser.first_name || targetUser.username}</b> بواسطة <b>${username}</b>`);
-      } catch (e) { await sendMsg(chatId, '❌ فشل الحظر. تأكد من صلاحيات البوت'); }
-      break;
-
-    case '/unban':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetUser.id, only_if_banned: true });
-        await supabase.from('telegram_users').update({ is_banned: false }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'unban');
-        await sendMsg(chatId, `✅ تم إلغاء حظر <b>${targetUser.first_name || targetUser.username}</b>`);
-      } catch { await sendMsg(chatId, '❌ فشلت العملية'); }
-      break;
-
-    case '/kick':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('banChatMember', { chat_id: chatId, user_id: targetUser.id });
-        await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetUser.id });
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'kick');
-        await sendMsg(chatId, `👢 تم طرد <b>${targetUser.first_name || targetUser.username}</b> بواسطة <b>${username}</b>`);
-      } catch { await sendMsg(chatId, '❌ فشل الطرد'); }
-      break;
-
-    case '/mute':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('restrictChatMember', {
-          chat_id: chatId, user_id: targetUser.id,
-          permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false },
-        });
-        await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'mute');
-        await sendMsg(chatId, `🔇 تم كتم <b>${targetUser.first_name || targetUser.username}</b>`);
-      } catch { await sendMsg(chatId, '❌ فشل الكتم'); }
-      break;
-
-    case '/unmute':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('restrictChatMember', {
-          chat_id: chatId, user_id: targetUser.id,
-          permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true },
-        });
-        await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'unmute');
-        await sendMsg(chatId, `🔊 تم إلغاء كتم <b>${targetUser.first_name || targetUser.username}</b>`);
-      } catch { await sendMsg(chatId, '❌ فشلت العملية'); }
-      break;
-
-    case '/warn':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      {
-        const { data: user } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetUser.id).eq('chat_id', chatId).single();
-        const newWarnings = (user?.warnings || 0) + 1;
-        await supabase.from('telegram_users').update({ warnings: newWarnings }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'warn', `تحذير ${newWarnings}/3`);
-        
-        if (newWarnings >= 3) {
-          try {
-            await tgCall('banChatMember', { chat_id: chatId, user_id: targetUser.id });
-            await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetUser.id });
-            await sendMsg(chatId, `⚠️ <b>${targetUser.first_name || targetUser.username}</b> حصل على 3 تحذيرات وتم طرده تلقائياً!`);
-          } catch {}
-        } else {
-          await sendMsg(chatId, `⚠️ تحذير لـ <b>${targetUser.first_name || targetUser.username}</b> (${newWarnings}/3)`);
+        switch (command) {
+          case '/ban': await tgCall('banChatMember', { chat_id: chatId, user_id: tgt.id }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', tgt.id).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'ban'); await sendMsg(chatId, `🚫 تم حظر <b>${tgtName}</b>`); break;
+          case '/unban': await tgCall('unbanChatMember', { chat_id: chatId, user_id: tgt.id, only_if_banned: true }); await supabase.from('telegram_users').update({ is_banned: false }).eq('user_id', tgt.id).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'unban'); await sendMsg(chatId, `✅ تم إلغاء حظر <b>${tgtName}</b>`); break;
+          case '/kick': await tgCall('banChatMember', { chat_id: chatId, user_id: tgt.id }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: tgt.id }); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'kick'); await sendMsg(chatId, `👢 تم طرد <b>${tgtName}</b>`); break;
+          case '/mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: tgt.id, permissions: { can_send_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', tgt.id).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'mute'); await sendMsg(chatId, `🔇 تم كتم <b>${tgtName}</b>`); break;
+          case '/unmute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: tgt.id, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', tgt.id).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'unmute'); await sendMsg(chatId, `🔊 تم إلغاء كتم <b>${tgtName}</b>`); break;
+          case '/warn': { const { data: u } = await supabase.from('telegram_users').select('warnings').eq('user_id', tgt.id).eq('chat_id', chatId).single(); const nw = (u?.warnings || 0) + 1; await supabase.from('telegram_users').update({ warnings: nw, total_warns: nw }).eq('user_id', tgt.id).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'warn', `${nw}/3`); if (nw >= 3) { await tgCall('banChatMember', { chat_id: chatId, user_id: tgt.id }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: tgt.id }); await sendMsg(chatId, `⚠️ <b>${tgtName}</b> وصل 3 تحذيرات وتم طرده!`); } else { await sendMsg(chatId, `⚠️ تحذير <b>${tgtName}</b> (${nw}/3)`); } break; }
+          case '/unwarn': { const { data: u } = await supabase.from('telegram_users').select('warnings').eq('user_id', tgt.id).eq('chat_id', chatId).single(); const nw = Math.max(0, (u?.warnings || 0) - 1); await supabase.from('telegram_users').update({ warnings: nw }).eq('user_id', tgt.id).eq('chat_id', chatId); await sendMsg(chatId, `✅ إزالة تحذير <b>${tgtName}</b> (${nw}/3)`); break; }
+          case '/promote': await tgCall('promoteChatMember', { chat_id: chatId, user_id: tgt.id, can_delete_messages: true, can_restrict_members: true, can_pin_messages: true, can_invite_users: true }); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'promote'); await sendMsg(chatId, `⬆️ تم ترقية <b>${tgtName}</b> ⭐`); break;
+          case '/demote': await tgCall('promoteChatMember', { chat_id: chatId, user_id: tgt.id, can_delete_messages: false, can_restrict_members: false, can_pin_messages: false }); await logAction(supabase, chatId, userId, username, tgt.id, tgtName, 'demote'); await sendMsg(chatId, `⬇️ تم تخفيض <b>${tgtName}</b>`); break;
         }
-      }
+      } catch (e) { await sendMsg(chatId, '❌ فشلت العملية'); }
       break;
+    }
 
-    case '/unwarn':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      {
-        const { data: user } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetUser.id).eq('chat_id', chatId).single();
-        const newW = Math.max(0, (user?.warnings || 0) - 1);
-        await supabase.from('telegram_users').update({ warnings: newW }).eq('user_id', targetUser.id).eq('chat_id', chatId);
-        await sendMsg(chatId, `✅ تم إزالة تحذير من <b>${targetUser.first_name || targetUser.username}</b> (${newW}/3)`);
-      }
+    case '/lock': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const lockMap: Record<string, string> = { links: 'lock_links', media: 'lock_media', stickers: 'lock_stickers', files: 'lock_files' };
+      if (lockMap[args[0]]) { await supabase.from('telegram_groups').update({ [lockMap[args[0]]]: true }).eq('chat_id', chatId); await sendMsg(chatId, `🔒 تم قفل ${args[0]}`); }
+      else await sendMsg(chatId, '❌ استخدم: /lock links|media|stickers|files');
       break;
+    }
 
-    case '/promote':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('promoteChatMember', {
-          chat_id: chatId, user_id: targetUser.id,
-          can_delete_messages: true, can_restrict_members: true, can_pin_messages: true, can_invite_users: true,
-        });
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'promote');
-        await sendMsg(chatId, `⬆️ تم ترقية <b>${targetUser.first_name || targetUser.username}</b> لمشرف ⭐`);
-      } catch { await sendMsg(chatId, '❌ فشلت الترقية'); }
+    case '/unlock': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const unlockMap: Record<string, string> = { links: 'lock_links', media: 'lock_media', stickers: 'lock_stickers', files: 'lock_files' };
+      if (unlockMap[args[0]]) { await supabase.from('telegram_groups').update({ [unlockMap[args[0]]]: false }).eq('chat_id', chatId); await sendMsg(chatId, `🔓 تم فتح ${args[0]}`); }
+      else await sendMsg(chatId, '❌ استخدم: /unlock links|media|stickers|files');
       break;
+    }
 
-    case '/demote':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('promoteChatMember', {
-          chat_id: chatId, user_id: targetUser.id,
-          can_delete_messages: false, can_restrict_members: false, can_pin_messages: false,
-        });
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'demote');
-        await sendMsg(chatId, `⬇️ تم تخفيض <b>${targetUser.first_name || targetUser.username}</b>`);
-      } catch { await sendMsg(chatId, '❌ فشلت العملية'); }
+    case '/antispam': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const on = args[0] === 'on';
+      await supabase.from('telegram_groups').update({ anti_spam: on }).eq('chat_id', chatId);
+      await sendMsg(chatId, on ? '🛡 تم تفعيل مضاد السبام' : '🛡 تم إيقاف مضاد السبام');
       break;
+    }
 
-    case '/lock':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      switch (args[0]) {
-        case 'links': await supabase.from('telegram_groups').update({ lock_links: true }).eq('chat_id', chatId); await sendMsg(chatId, '🔒 تم قفل الروابط'); break;
-        case 'media': await supabase.from('telegram_groups').update({ lock_media: true }).eq('chat_id', chatId); await sendMsg(chatId, '🔒 تم قفل الوسائط'); break;
-        case 'stickers': await supabase.from('telegram_groups').update({ lock_stickers: true }).eq('chat_id', chatId); await sendMsg(chatId, '🔒 تم قفل الملصقات'); break;
-        case 'files': await supabase.from('telegram_groups').update({ lock_files: true }).eq('chat_id', chatId); await sendMsg(chatId, '🔒 تم قفل الملفات'); break;
-        default: await sendMsg(chatId, '❌ استخدم: /lock links|media|stickers|files'); break;
-      }
+    case '/setwelcome': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      const wt = args.join(' ');
+      if (!wt) { await sendMsg(chatId, '❌ اكتب الرسالة بعد الأمر'); break; }
+      await supabase.from('telegram_groups').update({ welcome_message: wt }).eq('chat_id', chatId);
+      await sendMsg(chatId, `✅ رسالة الترحيب: ${wt}`);
       break;
+    }
 
-    case '/unlock':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      switch (args[0]) {
-        case 'links': await supabase.from('telegram_groups').update({ lock_links: false }).eq('chat_id', chatId); await sendMsg(chatId, '🔓 تم فتح الروابط'); break;
-        case 'media': await supabase.from('telegram_groups').update({ lock_media: false }).eq('chat_id', chatId); await sendMsg(chatId, '🔓 تم فتح الوسائط'); break;
-        case 'stickers': await supabase.from('telegram_groups').update({ lock_stickers: false }).eq('chat_id', chatId); await sendMsg(chatId, '🔓 تم فتح الملصقات'); break;
-        case 'files': await supabase.from('telegram_groups').update({ lock_files: false }).eq('chat_id', chatId); await sendMsg(chatId, '🔓 تم فتح الملفات'); break;
-        default: await sendMsg(chatId, '❌ استخدم: /unlock links|media|stickers|files'); break;
-      }
+    case '/pin': {
+      if (!replyMsg) { await sendMsg(chatId, '❌ رد على الرسالة'); break; }
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      try { await tgCall('pinChatMessage', { chat_id: chatId, message_id: replyMsg.message_id }); await sendMsg(chatId, '📌 تم التثبيت'); } catch { await sendMsg(chatId, '❌ فشل'); }
       break;
+    }
 
-    case '/antispam':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      if (args[0] === 'on') {
-        await supabase.from('telegram_groups').update({ anti_spam: true }).eq('chat_id', chatId);
-        await sendMsg(chatId, '🛡 تم تفعيل مضاد السبام');
-      } else if (args[0] === 'off') {
-        await supabase.from('telegram_groups').update({ anti_spam: false }).eq('chat_id', chatId);
-        await sendMsg(chatId, '🛡 تم إيقاف مضاد السبام');
-      } else {
-        await sendMsg(chatId, '❌ استخدم: /antispam on أو /antispam off');
-      }
+    case '/unpin': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      try { if (replyMsg) await tgCall('unpinChatMessage', { chat_id: chatId, message_id: replyMsg.message_id }); else await tgCall('unpinAllChatMessages', { chat_id: chatId }); await sendMsg(chatId, '📌 تم إلغاء التثبيت'); } catch { await sendMsg(chatId, '❌ فشل'); }
       break;
+    }
 
-    case '/setwelcome':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      {
-        const welcomeText = args.join(' ');
-        if (!welcomeText) { await sendMsg(chatId, '❌ اكتب رسالة الترحيب بعد الأمر'); break; }
-        await supabase.from('telegram_groups').update({ welcome_message: welcomeText }).eq('chat_id', chatId);
-        await sendMsg(chatId, `✅ تم تعيين رسالة الترحيب:\n${welcomeText}`);
-      }
+    case '/report': {
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة المخالف'); break; }
+      await sendMsg(chatId, `🚨 <b>بلاغ!</b>\nمن: ${username}\nضد: ${targetUser.first_name || targetUser.username}\n⚠️ تم إخطار المشرفين`);
+      await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'report', args.join(' ') || 'بدون سبب');
       break;
+    }
 
-    case '/pin':
-      if (!replyMsg) { await sendMsg(chatId, '❌ قم بالرد على الرسالة المراد تثبيتها'); break; }
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        await tgCall('pinChatMessage', { chat_id: chatId, message_id: replyMsg.message_id });
-        await sendMsg(chatId, '📌 تم تثبيت الرسالة');
-      } catch { await sendMsg(chatId, '❌ فشل التثبيت'); }
-      break;
+    // ==================== ENTERTAINMENT ====================
+    case '/top': { const { data: top } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).order('points', { ascending: false }).limit(10); if (top && top.length > 0) { const m = ['🥇', '🥈', '🥉']; const l = top.map((u: any, i: number) => `${m[i] || `${i+1}.`} <b>${u.first_name || u.username || u.user_id}</b> - ${u.points}⭐ ${u.coins}💰 ${u.reputation}♥️`).join('\n'); await sendMsg(chatId, `🏆 <b>ترتيب الأعضاء:</b>\n\n${l}`); } break; }
+    case '/points': { const { data: u } = await supabase.from('telegram_users').select('points, level, coins, reputation').eq('user_id', userId).eq('chat_id', chatId).single(); if (u) await sendMsg(chatId, `🏆 النقاط: <b>${u.points}</b> | المستوى: <b>${u.level}</b> | 💰 ${u.coins} | ⭐ ${u.reputation}`); break; }
+    case '/roll': { const d = Math.floor(Math.random() * 6) + 1; await sendMsg(chatId, `🎲 <b>${username}</b> حصل على: <b>${d}</b>`); break; }
+    case '/flip': { await sendMsg(chatId, `🪙 النتيجة: <b>${Math.random() > 0.5 ? 'صورة' : 'كتابة'}</b>`); break; }
+    case '/random': { const { data: rm } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).eq('is_banned', false); if (rm && rm.length > 0) { const r = rm[Math.floor(Math.random() * rm.length)]; await sendMsg(chatId, `🎲 <a href="tg://user?id=${r.user_id}">${r.first_name || r.username || r.user_id}</a> 🎉`); } break; }
+    case '/quiz': { const q = quizzes[Math.floor(Math.random() * quizzes.length)]; await sendMsg(chatId, `❓ <b>${q.q}</b>`, { inline_keyboard: q.options.map((o, i) => [{ text: o, callback_data: `quiz_${i}_${q.answer}` }]) }); break; }
+    case '/game': { const n = Math.floor(Math.random() * 10) + 1; const btns = Array.from({ length: 10 }, (_, i) => [{ text: `${i+1}`, callback_data: `game_${i+1}_${n}` }]).reduce((r: any[], b, i) => { if (i % 5 === 0) r.push([]); r[r.length-1].push(b[0]); return r; }, []); await sendMsg(chatId, `🎮 <b>خمن الرقم (1-10)!</b>`, { inline_keyboard: btns }); break; }
+    case '/truth': await sendMsg(chatId, `🤔 <b>حقيقة:</b>\n\n${truths[Math.floor(Math.random() * truths.length)]}`); break;
+    case '/dare': await sendMsg(chatId, `🔥 <b>تحدي:</b>\n\n${dares[Math.floor(Math.random() * dares.length)]}`); break;
+    case '/joke': await sendMsg(chatId, `😂 <b>نكتة:</b>\n\n${jokes[Math.floor(Math.random() * jokes.length)]}`); break;
 
-    case '/unpin':
-      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ هذا الأمر للمشرفين فقط'); break; }
-      try {
-        if (replyMsg) {
-          await tgCall('unpinChatMessage', { chat_id: chatId, message_id: replyMsg.message_id });
-        } else {
-          await tgCall('unpinAllChatMessages', { chat_id: chatId });
-        }
-        await sendMsg(chatId, '📌 تم إلغاء التثبيت');
-      } catch { await sendMsg(chatId, '❌ فشلت العملية'); }
-      break;
-
-    case '/report':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة المخالف للإبلاغ عنه'); break; }
-      {
-        await sendMsg(chatId, `🚨 <b>بلاغ جديد!</b>\n\nمن: <b>${username}</b>\nضد: <b>${targetUser.first_name || targetUser.username}</b>\nالسبب: ${args.join(' ') || 'غير محدد'}\n\n⚠️ تم إخطار المشرفين`);
-        await logAction(supabase, chatId, userId, username, targetUser.id, targetUser.username || targetUser.first_name, 'report', args.join(' ') || 'بدون سبب');
-      }
-      break;
-
-    case '/top': {
-      const { data: topUsers } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).order('points', { ascending: false }).limit(10);
-      if (topUsers && topUsers.length > 0) {
-        const medals = ['🥇', '🥈', '🥉'];
-        const list = topUsers.map((u: any, i: number) => `${medals[i] || `${i + 1}.`} <b>${u.first_name || u.username || u.user_id}</b> - ${u.points} نقطة (مستوى ${u.level})`).join('\n');
-        await sendMsg(chatId, `🏆 <b>أعلى 10 أعضاء نشاطاً:</b>\n\n${list}`);
-      } else {
-        await sendMsg(chatId, '❌ لا توجد بيانات أعضاء بعد');
+    case '/hack': {
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة العضو 😈'); break; }
+      const name = targetUser.first_name || targetUser.username || 'المستهدف';
+      let msgId: number | null = null;
+      for (let i = 0; i < hackMessages.length; i++) {
+        await new Promise(r => setTimeout(r, 1200));
+        if (i === 0) { const res = await sendMsg(chatId, `🎯 <b>هدف: ${name}</b>\n\n${hackMessages[i]}`); msgId = res.result?.message_id; }
+        else if (msgId) { try { await tgCall('editMessageText', { chat_id: chatId, message_id: msgId, text: `🎯 <b>هدف: ${name}</b>\n\n${hackMessages.slice(0, i + 1).join('\n')}${i === hackMessages.length - 1 ? `\n\n✅ <b>تم!</b> 😂 مزحة يا ${name}!` : ''}`, parse_mode: 'HTML' }); } catch {} }
       }
       break;
     }
 
-    case '/roll':
-      {
-        const dice = Math.floor(Math.random() * 6) + 1;
-        const diceEmoji = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-        await sendMsg(chatId, `🎲 ${diceEmoji[dice - 1]} رمى <b>${username}</b> النرد وحصل على: <b>${dice}</b>`);
-      }
-      break;
-
-    case '/flip':
-      {
-        const result = Math.random() > 0.5 ? 'صورة 🪙' : 'كتابة ✍️';
-        await sendMsg(chatId, `🪙 قلب <b>${username}</b> العملة والنتيجة: <b>${result}</b>`);
-      }
-      break;
-
-    case '/quiz': {
-      const quiz = quizzes[Math.floor(Math.random() * quizzes.length)];
-      const buttons = quiz.options.map((opt, i) => [{ text: opt, callback_data: `quiz_${i}_${quiz.answer}` }]);
-      await sendMsg(chatId, `❓ <b>${quiz.q}</b>`, { inline_keyboard: buttons });
-      break;
-    }
-
-    case '/game':
-      {
-        const num = Math.floor(Math.random() * 10) + 1;
-        await sendMsg(chatId, `🎮 <b>لعبة تخمين الرقم!</b>\n\nاخترت رقماً من 1 إلى 10\nخمن الرقم!`, {
-          inline_keyboard: Array.from({ length: 10 }, (_, i) => [{ text: `${i + 1}`, callback_data: `game_${i + 1}_${num}` }]).reduce((rows: any[], btn, i) => {
-            if (i % 5 === 0) rows.push([]);
-            rows[rows.length - 1].push(btn[0]);
-            return rows;
-          }, []),
-        });
-      }
-      break;
-
-    case '/truth':
-      await sendMsg(chatId, `🤔 <b>حقيقة:</b>\n\n${truths[Math.floor(Math.random() * truths.length)]}`);
-      break;
-
-    case '/dare':
-      await sendMsg(chatId, `🔥 <b>تحدي:</b>\n\n${dares[Math.floor(Math.random() * dares.length)]}`);
-      break;
-
-    case '/joke':
-      await sendMsg(chatId, `😂 <b>نكتة:</b>\n\n${jokes[Math.floor(Math.random() * jokes.length)]}`);
-      break;
-
-    case '/hack':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة العضو المراد "اختراقه" 😈'); break; }
-      {
-        const name = targetUser.first_name || targetUser.username || 'المستهدف';
-        let msgId: number | null = null;
-        for (let i = 0; i < hackMessages.length; i++) {
-          await new Promise(r => setTimeout(r, 1200));
-          if (i === 0) {
-            const res = await sendMsg(chatId, `🎯 <b>هدف الاختراق: ${name}</b>\n\n${hackMessages[i]}`);
-            msgId = res.result?.message_id;
-          } else if (msgId) {
-            try {
-              await tgCall('editMessageText', {
-                chat_id: chatId,
-                message_id: msgId,
-                text: `🎯 <b>هدف الاختراق: ${name}</b>\n\n${hackMessages.slice(0, i + 1).join('\n')}${i === hackMessages.length - 1 ? `\n\n✅ <b>تم الاختراق بنجاح!</b>\n😂 مجرد مزحة يا ${name}!` : ''}`,
-                parse_mode: 'HTML',
-              });
-            } catch {}
-          }
-        }
-      }
-      break;
-
-    case '/whisper':
-      if (!targetUser) { await sendMsg(chatId, '❌ قم بالرد على رسالة الشخص الذي تريد إرسال همسة له'); break; }
-      if (msg.chat.type === 'private') { await sendMsg(chatId, '❌ الهمسات تعمل في المجموعات فقط'); break; }
-      {
-        const whisperId = crypto.randomUUID();
-        await supabase.from('telegram_whispers').insert({
-          id: whisperId,
-          chat_id: chatId,
-          from_user_id: userId,
-          from_username: username,
-          to_user_id: targetUser.id,
-          to_username: targetUser.username || targetUser.first_name || '',
-          message: args.join(' ') || '(في انتظار الرسالة)',
-        });
-
-        if (args.length > 0) {
-          await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة لـ <b>${targetUser.first_name || targetUser.username}</b>`, {
-            inline_keyboard: [[{ text: '👁 عرض الهمسة', callback_data: `whisper_${whisperId}_${targetUser.id}` }]],
-          });
-        } else {
-          const botMe = await tgCall('getMe', {});
-          await sendMsg(chatId, `💌 <b>${username}</b> يريد إرسال همسة لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n@${username} أرسل الرسالة للبوت في الخاص`, {
-            inline_keyboard: [[{ text: '📩 إرسال همسة للبوت', url: `https://t.me/${botMe.result.username}?start=whisper_${whisperId}` }]],
-          });
-        }
-      }
-      break;
-
-    case '/points': {
-      const { data: user } = await supabase.from('telegram_users').select('points, level').eq('user_id', userId).eq('chat_id', chatId).single();
-      if (user) {
-        const levelEmojis = ['🌱', '🌿', '🌳', '⭐', '🏆'];
-        await sendMsg(chatId, `🏆 <b>إحصائياتك:</b>\n\n💰 النقاط: <b>${user.points}</b>\n${levelEmojis[Math.min(user.level - 1, 4)]} المستوى: <b>${user.level}</b>\n\nاستمر في النشاط لزيادة نقاطك! 🚀`);
-      } else {
-        await sendMsg(chatId, '❌ لم يتم العثور على بياناتك');
-      }
-      break;
-    }
-
-    case '/random': {
-      const { data: rmembers } = await supabase.from('telegram_users').select('*').eq('chat_id', chatId).eq('is_banned', false);
-      if (rmembers && rmembers.length > 0) {
-        const random = rmembers[Math.floor(Math.random() * rmembers.length)];
-        const name = random.first_name || random.username || random.user_id;
-        await sendMsg(chatId, `🎲 <b>العضو العشوائي:</b>\n\n🎯 <a href="tg://user?id=${random.user_id}">${name}</a> 🎉`);
-      } else {
-        await sendMsg(chatId, '❌ لا يوجد أعضاء');
-      }
+    case '/whisper': {
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص'); break; }
+      if (msg.chat.type === 'private') break;
+      const wId = crypto.randomUUID();
+      await supabase.from('telegram_whispers').insert({ id: wId, chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: args.join(' ') || '❤️' });
+      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة لـ <b>${targetUser.first_name || targetUser.username}</b>`, { inline_keyboard: [[{ text: '👁 عرض', callback_data: `whisper_${wId}_${targetUser.id}` }]] });
       break;
     }
   }
 }
 
-// ==================== CALLBACK QUERY HANDLER ====================
+// ==================== CALLBACK HANDLER ====================
 
-async function handleCallback(supabase: any, callbackQuery: any) {
-  const data = callbackQuery.data;
-  const userId = callbackQuery.from.id;
-  const chatId = callbackQuery.message?.chat.id;
+async function handleCallback(supabase: any, cq: any) {
+  const data = cq.data;
+  const userId = cq.from.id;
+  const chatId = cq.message?.chat.id;
 
   if (data.startsWith('quiz_')) {
-    const [, selected, correct] = data.split('_');
-    if (selected === correct) {
+    const [, sel, cor] = data.split('_');
+    if (sel === cor) {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: '✅ إجابة صحيحة! +10 نقاط 🎉', show_alert: true });
+      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 5 }).catch(() => {});
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ صح! +10 نقاط +5 عملات 🎉', show_alert: true });
     } else {
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: '❌ إجابة خاطئة! حاول مرة أخرى', show_alert: true });
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ خطأ! حاول مرة أخرى', show_alert: true });
     }
   } else if (data.startsWith('game_')) {
     const [, guess, answer] = data.split('_');
     if (guess === answer) {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: `🎉 أحسنت! الرقم هو ${answer}! +10 نقاط`, show_alert: true });
+      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 10 }).catch(() => {});
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `🎉 صح! الرقم ${answer}! +10 نقاط +10 عملات`, show_alert: true });
     } else {
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: `❌ خطأ! الرقم كان ${answer}`, show_alert: true });
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `❌ خطأ! الرقم كان ${answer}`, show_alert: true });
     }
   } else if (data.startsWith('whisper_')) {
-    const [, whisperId, targetId] = data.split('_');
-    if (String(userId) !== targetId) {
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: '❌ هذه الهمسة ليست لك!', show_alert: true });
-      return;
+    const [, wId, tId] = data.split('_');
+    if (String(userId) !== tId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ مش لك!', show_alert: true }); return; }
+    const { data: w } = await supabase.from('telegram_whispers').select('message, from_username').eq('id', wId).single();
+    if (w) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `💌 من ${w.from_username}:\n${w.message}`, show_alert: true }); await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId); }
+  } else if (data.startsWith('captcha_')) {
+    const [, memberId, result] = data.split('_');
+    if (String(userId) !== memberId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ ليس لك!', show_alert: true }); return; }
+    if (result === 'correct') {
+      await tgCall('restrictChatMember', { chat_id: chatId, user_id: userId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } });
+      await supabase.from('telegram_users').update({ captcha_verified: true }).eq('user_id', userId).eq('chat_id', chatId);
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ تم التحقق! مرحباً بك', show_alert: true });
+      const { data: group } = await supabase.from('telegram_groups').select('welcome_message').eq('chat_id', chatId).single();
+      await sendMsg(chatId, `${group?.welcome_message || 'مرحباً!'}\n\n✅ <b>${cq.from.first_name || 'عضو'}</b> اجتاز التحقق الأمني! 🎉`);
+    } else {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ إجابة خاطئة! حاول مرة أخرى', show_alert: true });
     }
-    const { data: whisper } = await supabase.from('telegram_whispers').select('message, from_username').eq('id', whisperId).single();
-    if (whisper) {
-      await tgCall('answerCallbackQuery', { callback_query_id: callbackQuery.id, text: `💌 من ${whisper.from_username}:\n${whisper.message}`, show_alert: true });
-      await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', whisperId);
+  } else if (data.startsWith('court_')) {
+    const [, caseId, verdict] = data.split('_');
+    // Check if already voted
+    const { data: existing } = await supabase.from('telegram_court_votes').select('id').eq('case_id', caseId).eq('user_id', userId).single();
+    if (existing) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ لقد صوتت بالفعل!', show_alert: true }); return; }
+
+    const vote = verdict === 'guilty';
+    await supabase.from('telegram_court_votes').insert({ case_id: caseId, user_id: userId, vote });
+
+    // Update counts
+    const field = vote ? 'votes_for' : 'votes_against';
+    const { data: courtCase } = await supabase.from('telegram_court_cases').select('*').eq('id', caseId).single();
+    if (courtCase) {
+      const newCount = (courtCase[field] || 0) + 1;
+      await supabase.from('telegram_court_cases').update({ [field]: newCount }).eq('id', caseId);
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `✅ تم تسجيل صوتك: ${vote ? 'مذنب' : 'بريء'}`, show_alert: true });
+
+      // Check if enough votes (5 total)
+      const totalVotes = (courtCase.votes_for || 0) + (courtCase.votes_against || 0) + 1;
+      if (totalVotes >= 5) {
+        const guilty = (vote ? newCount : courtCase.votes_for || 0) > (vote ? courtCase.votes_against || 0 : newCount);
+        await supabase.from('telegram_court_cases').update({ status: 'closed', verdict: guilty ? 'guilty' : 'innocent' }).eq('id', caseId);
+        if (guilty) {
+          await sendMsg(chatId, `⚖️ <b>حكم المحكمة: مذنب!</b>\n\n${courtCase.accused_username} تم إدانته بتصويت الأعضاء.\nسيتم تطبيق العقوبة تلقائياً (كتم لمدة ساعة)`);
+          await tgCall('restrictChatMember', { chat_id: chatId, user_id: courtCase.accused_user_id, permissions: { can_send_messages: false }, until_date: Math.floor(Date.now() / 1000) + 3600 });
+        } else {
+          await sendMsg(chatId, `⚖️ <b>حكم المحكمة: بريء!</b>\n\n${courtCase.accused_username} تمت تبرئته ✅`);
+        }
+      }
+    }
+  }
+}
+
+// ==================== SCHEDULED MESSAGES CHECK ====================
+
+async function checkScheduledMessages(supabase: any) {
+  const { data: msgs } = await supabase.from('telegram_scheduled_messages').select('*').eq('sent', false).lte('scheduled_at', new Date().toISOString());
+  if (msgs) {
+    for (const m of msgs) {
+      try {
+        await sendMsg(m.chat_id, `⏰ <b>رسالة مجدولة:</b>\n\n${m.message}`);
+        await supabase.from('telegram_scheduled_messages').update({ sent: true }).eq('id', m.id);
+      } catch (e) { console.error('Scheduled msg error:', e); }
     }
   }
 }
@@ -891,20 +933,16 @@ const MIN_REMAINING_MS = 5_000;
 
 Deno.serve(async () => {
   const startTime = Date.now();
-  
+
   try {
     const supabase = getSupabase();
     let totalProcessed = 0;
 
-    const { data: state, error: stateErr } = await supabase
-      .from('telegram_bot_state')
-      .select('update_offset')
-      .eq('id', 1)
-      .single();
+    // Check scheduled messages
+    await checkScheduledMessages(supabase);
 
-    if (stateErr) {
-      return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
-    }
+    const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset').eq('id', 1).single();
+    if (stateErr) return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
 
     let currentOffset = state.update_offset;
 
@@ -917,61 +955,37 @@ Deno.serve(async () => {
       if (timeout < 1) break;
 
       const response = await fetch(`${GATEWAY_URL}/getUpdates`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          offset: currentOffset,
-          timeout,
-          allowed_updates: ['message', 'callback_query'],
-        }),
+        method: 'POST', headers: getHeaders(),
+        body: JSON.stringify({ offset: currentOffset, timeout, allowed_updates: ['message', 'callback_query'] }),
       });
 
       const data = await response.json();
-      if (!response.ok) {
-        return new Response(JSON.stringify({ error: data }), { status: 502, headers: corsHeaders });
-      }
+      if (!response.ok) return new Response(JSON.stringify({ error: data }), { status: 502, headers: corsHeaders });
 
       const updates = data.result ?? [];
       if (updates.length === 0) continue;
 
-      const msgRows = updates
-        .filter((u: any) => u.message)
-        .map((u: any) => ({
-          update_id: u.update_id,
-          chat_id: u.message.chat.id,
-          user_id: u.message.from?.id || null,
-          username: u.message.from?.username || null,
-          text: u.message.text ?? null,
-          raw_update: u,
-        }));
-
-      if (msgRows.length > 0) {
-        await supabase.from('telegram_messages').upsert(msgRows, { onConflict: 'update_id' });
-      }
+      const msgRows = updates.filter((u: any) => u.message).map((u: any) => ({
+        update_id: u.update_id, chat_id: u.message.chat.id, user_id: u.message.from?.id || null, username: u.message.from?.username || null, text: u.message.text ?? null, raw_update: u,
+      }));
+      if (msgRows.length > 0) await supabase.from('telegram_messages').upsert(msgRows, { onConflict: 'update_id' });
 
       for (const update of updates) {
         try {
           if (update.message) await handleCommand(supabase, update);
           if (update.callback_query) await handleCallback(supabase, update);
-        } catch (e) {
-          console.error('Error processing update:', e);
-        }
+        } catch (e) { console.error('Error:', e); }
       }
 
       totalProcessed += updates.length;
-
       const newOffset = Math.max(...updates.map((u: any) => u.update_id)) + 1;
-      await supabase.from('telegram_bot_state')
-        .update({ update_offset: newOffset, updated_at: new Date().toISOString() })
-        .eq('id', 1);
-
+      await supabase.from('telegram_bot_state').update({ update_offset: newOffset, updated_at: new Date().toISOString() }).eq('id', 1);
       currentOffset = newOffset;
     }
 
-    return new Response(JSON.stringify({ ok: true, processed: totalProcessed, finalOffset: currentOffset }), { headers: corsHeaders });
+    return new Response(JSON.stringify({ ok: true, processed: totalProcessed }), { headers: corsHeaders });
   } catch (error) {
     console.error('Poll error:', error);
-    const msg = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(JSON.stringify({ error: msg }), { status: 500, headers: corsHeaders });
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown' }), { status: 500, headers: corsHeaders });
   }
 });
