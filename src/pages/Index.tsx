@@ -7,8 +7,10 @@ import LogsPanel from "@/components/dashboard/LogsPanel";
 import WhispersPanel from "@/components/dashboard/WhispersPanel";
 import EntertainmentPanel from "@/components/dashboard/EntertainmentPanel";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
+import EconomyPanel from "@/components/dashboard/EconomyPanel";
+import TicketsPanel from "@/components/dashboard/TicketsPanel";
 
-export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings";
+export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets";
 
 const Index = () => {
   const [activePanel, setActivePanel] = useState<PanelId>("home");
@@ -22,6 +24,8 @@ const Index = () => {
       case "logs": return <LogsPanel />;
       case "whispers": return <WhispersPanel />;
       case "entertainment": return <EntertainmentPanel />;
+      case "economy": return <EconomyPanel />;
+      case "tickets": return <TicketsPanel />;
       case "settings": return <SettingsPanel />;
       default: return <DashboardHome />;
     }

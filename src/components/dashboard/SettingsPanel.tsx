@@ -1,79 +1,108 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Settings, Bot, Shield, Gamepad2, Info, Megaphone } from "lucide-react";
+import { Settings, Bot, Shield, Gamepad2, Info, Megaphone, Coins, Scale, FileText, Brain, Lock, Clock } from "lucide-react";
 
 const commandSections = [
   {
     title: "🤖 الذكاء الاصطناعي (فادي)",
     icon: Bot,
     commands: [
-      { cmd: 'اذكر "فادي"', desc: "فادي يفهم ويتصرف تلقائياً - حظر، طرد، كتم، أو حتى محادثة عادية" },
-      { cmd: "مثال: يا فادي احظر", desc: "بالرد على رسالة الشخص المراد حظره" },
-      { cmd: "مثال: يا فادي نكتة", desc: "يرد بنكتة مضحكة" },
+      { cmd: 'اذكر "فادي"', desc: "فادي يفهم ويتصرف تلقائياً" },
+      { cmd: "مثال: يا فادي احظر", desc: "بالرد على رسالة الشخص" },
     ],
   },
   {
     title: "👑 أوامر الإدارة",
     icon: Shield,
     commands: [
-      { cmd: "/ban", desc: "حظر عضو (بالرد على رسالته)" },
-      { cmd: "/unban", desc: "إلغاء حظر عضو" },
+      { cmd: "/ban /unban", desc: "حظر/إلغاء حظر" },
       { cmd: "/kick", desc: "طرد عضو" },
-      { cmd: "/mute", desc: "كتم عضو" },
-      { cmd: "/unmute", desc: "إلغاء كتم عضو" },
-      { cmd: "/warn", desc: "تحذير عضو (3 تحذيرات = طرد)" },
-      { cmd: "/unwarn", desc: "إزالة تحذير" },
-      { cmd: "/promote", desc: "ترقية عضو لمشرف" },
-      { cmd: "/demote", desc: "تخفيض مشرف" },
-      { cmd: "/pin", desc: "تثبيت رسالة" },
-      { cmd: "/unpin", desc: "إلغاء تثبيت" },
-      { cmd: "/report", desc: "إبلاغ عن مخالفة (بالرد)" },
+      { cmd: "/mute /unmute", desc: "كتم/إلغاء كتم" },
+      { cmd: "/warn /unwarn", desc: "تحذير (3=طرد)" },
+      { cmd: "/promote /demote", desc: "ترقية/تخفيض" },
+      { cmd: "/pin /unpin", desc: "تثبيت رسالة" },
+      { cmd: "/report", desc: "إبلاغ عن مخالفة" },
     ],
   },
   {
-    title: "🔒 الحماية والإعدادات",
-    icon: Settings,
+    title: "🔒 حماية متقدمة",
+    icon: Lock,
     commands: [
-      { cmd: "/lock links|media|stickers|files", desc: "قفل نوع محتوى" },
-      { cmd: "/unlock links|media|stickers|files", desc: "فتح نوع محتوى" },
-      { cmd: "/antispam on|off", desc: "تشغيل/إيقاف مضاد السبام" },
-      { cmd: "/setwelcome", desc: "تعيين رسالة ترحيب" },
+      { cmd: "/lock /unlock", desc: "قفل links|media|stickers|files" },
+      { cmd: "/antispam on|off", desc: "مضاد السبام" },
+      { cmd: "/captcha on|off", desc: "كابتشا رياضية للأعضاء الجدد" },
+      { cmd: "/toxicity on|off", desc: "فلتر المحتوى السام بالـ AI" },
+      { cmd: "/nightmode 23 6", desc: "وضع ليلي (حذف رسائل)" },
+      { cmd: "/slowmode 30", desc: "وضع بطيء (ثواني)" },
+    ],
+  },
+  {
+    title: "💰 النظام الاقتصادي",
+    icon: Coins,
+    commands: [
+      { cmd: "/daily", desc: "مكافأة يومية (سلسلة أيام)" },
+      { cmd: "/coins /wallet", desc: "عرض رصيدك" },
+      { cmd: "/transfer 100", desc: "تحويل عملات (بالرد)" },
+      { cmd: "/shop", desc: "عرض المتجر" },
+      { cmd: "/buy 1", desc: "شراء عنصر بالرقم" },
+    ],
+  },
+  {
+    title: "🏆 التحديات والسمعة",
+    icon: Scale,
+    commands: [
+      { cmd: "/challenge", desc: "تحدي اليوم" },
+      { cmd: "/mychallenges", desc: "تقدمك في التحدي" },
+      { cmd: "/reputation /rep", desc: "إعطاء سمعة (بالرد)" },
+      { cmd: "/trust", desc: "مستوى الثقة" },
+      { cmd: "/profile", desc: "بروفايل كامل" },
+    ],
+  },
+  {
+    title: "⚖️ المحكمة والتذاكر",
+    icon: Scale,
+    commands: [
+      { cmd: "/court سبب", desc: "تقديم عضو للمحكمة (تصويت)" },
+      { cmd: "/ticket موضوع", desc: "فتح تذكرة دعم" },
+    ],
+  },
+  {
+    title: "📝 أدوات ذكية",
+    icon: FileText,
+    commands: [
+      { cmd: "/addfaq سؤال|إجابة|كلمات", desc: "إضافة FAQ" },
+      { cmd: "/faq", desc: "عرض الأسئلة الشائعة" },
+      { cmd: "/save", desc: "حفظ رسالة (بالرد)" },
+      { cmd: "/saved", desc: "عرض المحفوظات" },
+      { cmd: "/schedule 30m رسالة", desc: "جدولة رسالة" },
     ],
   },
   {
     title: "📢 النداء",
     icon: Megaphone,
     commands: [
-      { cmd: "/tagall", desc: "نداء جميع الأعضاء (يذكر الكل)" },
-      { cmd: "/all", desc: "نداء سريع" },
+      { cmd: "/tagall /all", desc: "نداء جميع الأعضاء بإشعار" },
     ],
   },
   {
     title: "🎮 الترفيه",
     icon: Gamepad2,
     commands: [
-      { cmd: "/quiz", desc: "بدء لعبة أسئلة" },
-      { cmd: "/game", desc: "لعبة تخمين الرقم" },
-      { cmd: "/truth", desc: "سؤال حقيقة" },
-      { cmd: "/dare", desc: "تحدي" },
-      { cmd: "/joke", desc: "نكتة عشوائية" },
-      { cmd: "/hack", desc: "اختراق وهمي (بالرد)" },
-      { cmd: "/whisper", desc: "إرسال همسة (بالرد)" },
-      { cmd: "/points", desc: "عرض نقاطك" },
-      { cmd: "/top", desc: "أعلى 10 أعضاء" },
-      { cmd: "/random", desc: "اختيار عضو عشوائي" },
-      { cmd: "/roll", desc: "رمي نرد" },
-      { cmd: "/flip", desc: "قلب عملة" },
+      { cmd: "/quiz", desc: "أسئلة (+عملات)" },
+      { cmd: "/game", desc: "تخمين رقم (+عملات)" },
+      { cmd: "/truth /dare", desc: "حقيقة أم تحدي" },
+      { cmd: "/joke", desc: "نكتة" },
+      { cmd: "/hack", desc: "اختراق وهمي" },
+      { cmd: "/whisper", desc: "همسة سرية" },
+      { cmd: "/roll /flip /random", desc: "نرد/عملة/عشوائي" },
     ],
   },
   {
     title: "ℹ️ معلومات",
     icon: Info,
     commands: [
-      { cmd: "/id", desc: "عرض معرفك أو معرف عضو" },
-      { cmd: "/info", desc: "معلومات تفصيلية عن عضو" },
-      { cmd: "/dev", desc: "التواصل مع المطور" },
-      { cmd: "/start", desc: "بدء استخدام البوت" },
-      { cmd: "/help", desc: "عرض قائمة الأوامر" },
+      { cmd: "/id /info", desc: "معلومات عضو" },
+      { cmd: "/top /points /stats", desc: "إحصائيات" },
+      { cmd: "/dev", desc: "المطور" },
     ],
   },
 ];
@@ -83,23 +112,23 @@ const SettingsPanel = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">الإعدادات والأوامر</h1>
-        <p className="text-muted-foreground text-sm mt-1">دليل أوامر البوت الكامل مع الذكاء الاصطناعي</p>
+        <p className="text-muted-foreground text-sm mt-1">دليل أوامر البوت الكامل - 20+ ميزة</p>
       </div>
 
       {commandSections.map((section) => (
         <Card key={section.title}>
-          <CardHeader>
+          <CardHeader className="pb-2">
             <div className="flex items-center gap-3">
               <section.icon className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg">{section.title}</CardTitle>
+              <CardTitle className="text-base">{section.title}</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-2">
+            <div className="grid gap-1.5">
               {section.commands.map((c) => (
                 <div key={c.cmd} className="flex items-center gap-4 p-2 rounded-lg hover:bg-muted/50 transition-colors">
-                  <code className="bg-muted px-3 py-1 rounded text-sm font-mono min-w-[180px] text-primary">{c.cmd}</code>
-                  <span className="text-sm text-muted-foreground">{c.desc}</span>
+                  <code className="bg-muted px-2 py-1 rounded text-xs font-mono min-w-[140px] text-primary">{c.cmd}</code>
+                  <span className="text-xs text-muted-foreground">{c.desc}</span>
                 </div>
               ))}
             </div>
