@@ -77,18 +77,26 @@ async function notifyDeveloper(text: string) {
   try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
-async function callAI(prompt: string, systemPrompt: string): Promise<string> {
+async function callAI(prompt: string, systemPrompt: string, imageUrl?: string): Promise<string> {
+  const userContent: any = imageUrl
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl } }]
+    : prompt;
+
   const res = await fetch(AI_GATEWAY_URL, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'google/gemini-2.5-flash',
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
     }),
   });
   if (!res.ok) throw new Error(`AI error: ${res.status}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '';
+}
+
+async function safeRpc(supabase: any, fn: string, params: any) {
+  try { await supabase.rpc(fn, params); } catch (e) { console.error(`rpc ${fn} error:`, e); }
 }
 
 // ==================== FEATURE 1: TAGALL (IMPROVED) ====================
