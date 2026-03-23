@@ -128,22 +128,40 @@ async function tagAllMembers(supabase: any, chatId: number, callerUsername: stri
 
 // ==================== FEATURE 2: AI ASSISTANT "فادي" ====================
 
-async function handleAI(supabase: any, chatId: number, userId: number, username: string, text: string, replyMsg: any, messageId: number) {
+async function handleAI(supabase: any, chatId: number, userId: number, username: string, text: string, replyMsg: any, messageId: number, photo?: any) {
   const isUserAdmin = await isAdmin(chatId, userId);
   const isOwner = isDeveloper(userId);
 
-  const systemPrompt = `أنت فادي، مساعد ذكي لإدارة مجموعات تيليجرام. ودود وذكي ومرح. لهجة مصرية خفيفة.
-المستخدم: ${username} (ID: ${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
-${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID: ${replyMsg.from?.id}) - "${replyMsg.text || '(بدون نص)'}"` : ''}
+  // Get group context
+  const { data: groupMembers } = await supabase.from('telegram_users').select('first_name, username, user_id, points, coins').eq('chat_id', chatId).limit(30);
+  const { data: groupInfo } = await supabase.from('telegram_groups').select('title').eq('chat_id', chatId).single();
 
-إذا طلب إجراء إداري وكان مشرفاً/المطور:
-أضف في النهاية: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
-إذا لم يكن مشرفاً، أخبره بلطف.
-لا تضع JSON إذا لم يطلب إجراء إداري. كن مختصراً.`;
+  // Handle photo with AI vision
+  let imageUrl: string | undefined;
+  if (photo && photo.length > 0) {
+    try {
+      const fileId = photo[photo.length - 1].file_id;
+      const fileData = await tgCall('getFile', { file_id: fileId });
+      if (fileData.result?.file_path) {
+        imageUrl = `https://connector-gateway.lovable.dev/telegram/file/${fileData.result.file_path}`;
+      }
+    } catch (e) { console.error('Photo error:', e); }
+  }
+
+  const systemPrompt = `أنت فادي، مساعد ذكي ومرح لمجموعات تيليجرام. لهجة مصرية خفيفة وودودة. أنت دائماً موجود ومتفاعل.
+المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
+المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء: ${(groupMembers || []).length}
+${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${replyMsg.text || '(وسائط)'}"` : ''}
+
+إذا طلب إجراء إداري وكان مشرفاً/المطور أضف: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
+كن مختصراً (2-4 أسطر). لا JSON بدون طلب إداري. علق على الصور إن وُجدت.`;
 
   try {
-    const reply = await callAI(text, systemPrompt);
-    if (!reply) { await sendMsg(chatId, '🤖 فادي مش فاهم، جرب تاني! 🤔', undefined, messageId); return; }
+    const userPrompt = text || (imageUrl ? 'صورة مرسلة، علق عليها' : '');
+    if (!userPrompt && !imageUrl) return;
+
+    const reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    if (!reply) return;
 
     let cleanReply = reply;
     const actionMatch = reply.match(/\[ACTION:(\{.*?\})\]/);
@@ -155,20 +173,17 @@ ${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:
         if (targetId && (isUserAdmin || isOwner)) {
           const tgtName = replyMsg?.from?.username || replyMsg?.from?.first_name || String(targetId);
           switch (action.type) {
-            case 'ban': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'ban', 'عبر فادي AI'); break;
-            case 'kick': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'kick', 'عبر فادي AI'); break;
-            case 'mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'mute', 'عبر فادي AI'); break;
+            case 'ban': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'ban', 'عبر فادي'); break;
+            case 'kick': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'kick', 'عبر فادي'); break;
+            case 'mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'mute', 'عبر فادي'); break;
             case 'unmute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', targetId).eq('chat_id', chatId); break;
             case 'warn': { const { data: u } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetId).eq('chat_id', chatId).single(); const nw = (u?.warnings || 0) + 1; await supabase.from('telegram_users').update({ warnings: nw, total_warns: nw }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'warn', `${nw}/3 عبر فادي`); if (nw >= 3) { await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); cleanReply += '\n⚠️ وصل 3 تحذيرات وتم طرده!'; } break; }
           }
         }
       } catch (e) { console.error('AI action error:', e); }
     }
-    if (cleanReply) await sendMsg(chatId, `🤖 <b>فادي:</b>\n${cleanReply}`, undefined, messageId);
-  } catch (e) {
-    console.error('AI error:', e);
-    await sendMsg(chatId, '🤖 فادي مش متاح دلوقتي، جرب تاني! 😅', undefined, messageId);
-  }
+    if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+  } catch (e) { console.error('AI error:', e); }
 }
 
 // ==================== FEATURE 3: TOXICITY FILTER ====================
