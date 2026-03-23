@@ -77,18 +77,26 @@ async function notifyDeveloper(text: string) {
   try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
-async function callAI(prompt: string, systemPrompt: string): Promise<string> {
+async function callAI(prompt: string, systemPrompt: string, imageUrl?: string): Promise<string> {
+  const userContent: any = imageUrl
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl } }]
+    : prompt;
+
   const res = await fetch(AI_GATEWAY_URL, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'google/gemini-2.5-flash',
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
     }),
   });
   if (!res.ok) throw new Error(`AI error: ${res.status}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '';
+}
+
+async function safeRpc(supabase: any, fn: string, params: any) {
+  try { await supabase.rpc(fn, params); } catch (e) { console.error(`rpc ${fn} error:`, e); }
 }
 
 // ==================== FEATURE 1: TAGALL (IMPROVED) ====================
@@ -120,22 +128,40 @@ async function tagAllMembers(supabase: any, chatId: number, callerUsername: stri
 
 // ==================== FEATURE 2: AI ASSISTANT "فادي" ====================
 
-async function handleAI(supabase: any, chatId: number, userId: number, username: string, text: string, replyMsg: any, messageId: number) {
+async function handleAI(supabase: any, chatId: number, userId: number, username: string, text: string, replyMsg: any, messageId: number, photo?: any) {
   const isUserAdmin = await isAdmin(chatId, userId);
   const isOwner = isDeveloper(userId);
 
-  const systemPrompt = `أنت فادي، مساعد ذكي لإدارة مجموعات تيليجرام. ودود وذكي ومرح. لهجة مصرية خفيفة.
-المستخدم: ${username} (ID: ${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
-${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID: ${replyMsg.from?.id}) - "${replyMsg.text || '(بدون نص)'}"` : ''}
+  // Get group context
+  const { data: groupMembers } = await supabase.from('telegram_users').select('first_name, username, user_id, points, coins').eq('chat_id', chatId).limit(30);
+  const { data: groupInfo } = await supabase.from('telegram_groups').select('title').eq('chat_id', chatId).single();
 
-إذا طلب إجراء إداري وكان مشرفاً/المطور:
-أضف في النهاية: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
-إذا لم يكن مشرفاً، أخبره بلطف.
-لا تضع JSON إذا لم يطلب إجراء إداري. كن مختصراً.`;
+  // Handle photo with AI vision
+  let imageUrl: string | undefined;
+  if (photo && photo.length > 0) {
+    try {
+      const fileId = photo[photo.length - 1].file_id;
+      const fileData = await tgCall('getFile', { file_id: fileId });
+      if (fileData.result?.file_path) {
+        imageUrl = `https://connector-gateway.lovable.dev/telegram/file/${fileData.result.file_path}`;
+      }
+    } catch (e) { console.error('Photo error:', e); }
+  }
+
+  const systemPrompt = `أنت فادي، مساعد ذكي ومرح لمجموعات تيليجرام. لهجة مصرية خفيفة وودودة. أنت دائماً موجود ومتفاعل.
+المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
+المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء: ${(groupMembers || []).length}
+${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${replyMsg.text || '(وسائط)'}"` : ''}
+
+إذا طلب إجراء إداري وكان مشرفاً/المطور أضف: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
+كن مختصراً (2-4 أسطر). لا JSON بدون طلب إداري. علق على الصور إن وُجدت.`;
 
   try {
-    const reply = await callAI(text, systemPrompt);
-    if (!reply) { await sendMsg(chatId, '🤖 فادي مش فاهم، جرب تاني! 🤔', undefined, messageId); return; }
+    const userPrompt = text || (imageUrl ? 'صورة مرسلة، علق عليها' : '');
+    if (!userPrompt && !imageUrl) return;
+
+    const reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    if (!reply) return;
 
     let cleanReply = reply;
     const actionMatch = reply.match(/\[ACTION:(\{.*?\})\]/);
@@ -147,20 +173,17 @@ ${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:
         if (targetId && (isUserAdmin || isOwner)) {
           const tgtName = replyMsg?.from?.username || replyMsg?.from?.first_name || String(targetId);
           switch (action.type) {
-            case 'ban': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'ban', 'عبر فادي AI'); break;
-            case 'kick': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'kick', 'عبر فادي AI'); break;
-            case 'mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'mute', 'عبر فادي AI'); break;
+            case 'ban': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await supabase.from('telegram_users').update({ is_banned: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'ban', 'عبر فادي'); break;
+            case 'kick': await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'kick', 'عبر فادي'); break;
+            case 'mute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: false, can_send_media_messages: false, can_send_other_messages: false } }); await supabase.from('telegram_users').update({ is_muted: true }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'mute', 'عبر فادي'); break;
             case 'unmute': await tgCall('restrictChatMember', { chat_id: chatId, user_id: targetId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await supabase.from('telegram_users').update({ is_muted: false }).eq('user_id', targetId).eq('chat_id', chatId); break;
             case 'warn': { const { data: u } = await supabase.from('telegram_users').select('warnings').eq('user_id', targetId).eq('chat_id', chatId).single(); const nw = (u?.warnings || 0) + 1; await supabase.from('telegram_users').update({ warnings: nw, total_warns: nw }).eq('user_id', targetId).eq('chat_id', chatId); await logAction(supabase, chatId, userId, username, targetId, tgtName, 'warn', `${nw}/3 عبر فادي`); if (nw >= 3) { await tgCall('banChatMember', { chat_id: chatId, user_id: targetId }); await tgCall('unbanChatMember', { chat_id: chatId, user_id: targetId }); cleanReply += '\n⚠️ وصل 3 تحذيرات وتم طرده!'; } break; }
           }
         }
       } catch (e) { console.error('AI action error:', e); }
     }
-    if (cleanReply) await sendMsg(chatId, `🤖 <b>فادي:</b>\n${cleanReply}`, undefined, messageId);
-  } catch (e) {
-    console.error('AI error:', e);
-    await sendMsg(chatId, '🤖 فادي مش متاح دلوقتي، جرب تاني! 😅', undefined, messageId);
-  }
+    if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+  } catch (e) { console.error('AI error:', e); }
 }
 
 // ==================== FEATURE 3: TOXICITY FILTER ====================
@@ -351,26 +374,38 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     // Track activity
-    await supabase.rpc('increment_message_count', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-    await supabase.rpc('update_trust_level', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
+    await safeRpc(supabase, 'increment_message_count', { p_user_id: userId, p_chat_id: chatId });
+    await safeRpc(supabase, 'update_trust_level', { p_user_id: userId, p_chat_id: chatId });
   }
 
-  // AI mention
-  if ((text.includes('فادي') || text.includes('Fadi') || text.includes('fadi')) && msg.chat.type !== 'private') {
-    await handleAI(supabase, chatId, userId, username, text, replyMsg, msg.message_id);
-    return;
-  }
+  // Get bot info for detecting replies to bot
+  let botId: number | null = null;
+  try { const me = await tgCall('getMe', {}); botId = me.result?.id || null; } catch {}
 
-  if (!text.startsWith('/')) {
-    if (msg.chat.type !== 'private') {
-      await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-      // Give 1 coin per message
-      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
-      // Give 1 reputation per 5 messages
-      const { data: usr } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
-      if (usr && usr.message_count % 5 === 0) {
-        await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
-      }
+  // Fadi AI responds to ALL non-command messages in groups
+  if (!text.startsWith('/') && msg.chat.type !== 'private') {
+    // Give points/coins first
+    await safeRpc(supabase, 'increment_points', { p_user_id: userId, p_chat_id: chatId });
+    await safeRpc(supabase, 'increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 });
+    const { data: usr } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
+    if (usr && usr.message_count % 5 === 0) {
+      await safeRpc(supabase, 'update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 });
+    }
+
+    // Determine if Fadi should respond:
+    // 1. Message mentions فادي/Fadi
+    // 2. Message is a reply to the bot's message
+    // 3. Message has a photo (AI vision)
+    // 4. Message is a question (ends with ?)
+    // 5. Message mentions the bot by @username
+    const mentionsFadi = text && (text.includes('فادي') || text.toLowerCase().includes('fadi'));
+    const isReplyToBot = replyMsg && botId && replyMsg.from?.id === botId;
+    const hasPhoto = !!(msg.photo && msg.photo.length > 0);
+    const isQuestion = text && (text.includes('؟') || text.includes('?'));
+    const mentionsBot = text && botId && msg.entities?.some((e: any) => e.type === 'mention');
+
+    if (mentionsFadi || isReplyToBot || hasPhoto || isQuestion || mentionsBot) {
+      await handleAI(supabase, chatId, userId, username, text, replyMsg, msg.message_id, msg.photo);
     }
     return;
   }
