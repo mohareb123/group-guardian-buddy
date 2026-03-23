@@ -374,26 +374,38 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     // Track activity
-    await supabase.rpc('increment_message_count', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-    await supabase.rpc('update_trust_level', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
+    await safeRpc(supabase, 'increment_message_count', { p_user_id: userId, p_chat_id: chatId });
+    await safeRpc(supabase, 'update_trust_level', { p_user_id: userId, p_chat_id: chatId });
   }
 
-  // AI mention
-  if ((text.includes('فادي') || text.includes('Fadi') || text.includes('fadi')) && msg.chat.type !== 'private') {
-    await handleAI(supabase, chatId, userId, username, text, replyMsg, msg.message_id);
-    return;
-  }
+  // Get bot info for detecting replies to bot
+  let botId: number | null = null;
+  try { const me = await tgCall('getMe', {}); botId = me.result?.id || null; } catch {}
 
-  if (!text.startsWith('/')) {
-    if (msg.chat.type !== 'private') {
-      await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
-      // Give 1 coin per message
-      await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
-      // Give 1 reputation per 5 messages
-      const { data: usr } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
-      if (usr && usr.message_count % 5 === 0) {
-        await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 }).catch(() => {});
-      }
+  // Fadi AI responds to ALL non-command messages in groups
+  if (!text.startsWith('/') && msg.chat.type !== 'private') {
+    // Give points/coins first
+    await safeRpc(supabase, 'increment_points', { p_user_id: userId, p_chat_id: chatId });
+    await safeRpc(supabase, 'increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 });
+    const { data: usr } = await supabase.from('telegram_users').select('message_count').eq('user_id', userId).eq('chat_id', chatId).single();
+    if (usr && usr.message_count % 5 === 0) {
+      await safeRpc(supabase, 'update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: 1 });
+    }
+
+    // Determine if Fadi should respond:
+    // 1. Message mentions فادي/Fadi
+    // 2. Message is a reply to the bot's message
+    // 3. Message has a photo (AI vision)
+    // 4. Message is a question (ends with ?)
+    // 5. Message mentions the bot by @username
+    const mentionsFadi = text && (text.includes('فادي') || text.toLowerCase().includes('fadi'));
+    const isReplyToBot = replyMsg && botId && replyMsg.from?.id === botId;
+    const hasPhoto = !!(msg.photo && msg.photo.length > 0);
+    const isQuestion = text && (text.includes('؟') || text.includes('?'));
+    const mentionsBot = text && botId && msg.entities?.some((e: any) => e.type === 'mention');
+
+    if (mentionsFadi || isReplyToBot || hasPhoto || isQuestion || mentionsBot) {
+      await handleAI(supabase, chatId, userId, username, text, replyMsg, msg.message_id, msg.photo);
     }
     return;
   }
