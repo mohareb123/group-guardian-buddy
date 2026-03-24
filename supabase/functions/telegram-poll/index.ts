@@ -903,11 +903,29 @@ async function handleCallback(supabase: any, cq: any) {
     } else {
       await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `❌ خطأ! الرقم كان ${answer}`, show_alert: true });
     }
-  } else if (data.startsWith('whisper_')) {
-    const [, wId, tId] = data.split('_');
-    if (String(userId) !== tId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ مش لك!', show_alert: true }); return; }
+  } else if (data.startsWith('wh:') || data.startsWith('whisper_')) {
+    let wId: string, tId: string;
+    if (data.startsWith('wh:')) {
+      const parts = data.split(':');
+      wId = parts[1]; tId = parts[2];
+    } else {
+      // Legacy format: whisper_UUID_targetId - UUID has dashes so we need special parsing
+      const withoutPrefix = data.substring(8); // remove 'whisper_'
+      tId = withoutPrefix.substring(withoutPrefix.lastIndexOf('_') + 1);
+      wId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
+    }
+    if (String(userId) !== tId) {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '🔒 هذه الهمسة ليست لك! فقط الشخص المقصود يمكنه قراءتها.', show_alert: true });
+      return;
+    }
     const { data: w } = await supabase.from('telegram_whispers').select('message, from_username').eq('id', wId).single();
-    if (w) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `💌 من ${w.from_username}:\n${w.message}`, show_alert: true }); await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId); }
+    if (w) {
+      const whisperText = `💌 همسة من ${w.from_username}:\n\n${w.message}`;
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: whisperText.slice(0, 200), show_alert: true });
+      await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId);
+    } else {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ الهمسة غير موجودة أو تم حذفها', show_alert: true });
+    }
   } else if (data.startsWith('captcha_')) {
     const [, memberId, result] = data.split('_');
     if (String(userId) !== memberId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ ليس لك!', show_alert: true }); return; }
