@@ -1092,7 +1092,7 @@ Deno.serve(async () => {
       for (const update of updates) {
         try {
           if (update.message) await handleCommand(supabase, update);
-          if (update.callback_query) await handleCallback(supabase, update);
+          if (update.callback_query) await handleCallback(supabase, update.callback_query);
         } catch (e) { console.error('Error:', e); }
       }
 
