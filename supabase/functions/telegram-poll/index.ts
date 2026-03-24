@@ -862,11 +862,17 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     case '/whisper': {
-      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص'); break; }
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص الذي تريد إرسال همسة له'); break; }
       if (msg.chat.type === 'private') break;
-      const wId = crypto.randomUUID();
-      await supabase.from('telegram_whispers').insert({ id: wId, chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: args.join(' ') || '❤️' });
-      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة لـ <b>${targetUser.first_name || targetUser.username}</b>`, { inline_keyboard: [[{ text: '👁 عرض', callback_data: `whisper_${wId}_${targetUser.id}` }]] });
+      if (targetUser.is_bot) { await sendMsg(chatId, '❌ لا يمكنك إرسال همسة لبوت'); break; }
+      const whisperMsg = args.join(' ');
+      if (!whisperMsg) { await sendMsg(chatId, '❌ اكتب الرسالة بعد الأمر:\n<code>/whisper مرحبا</code>', undefined, msg.message_id); break; }
+      const wId = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      await supabase.from('telegram_whispers').insert({ chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: whisperMsg });
+      try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+      const { data: whisperRow } = await supabase.from('telegram_whispers').select('id').eq('from_user_id', userId).eq('to_user_id', targetUser.id).eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1).single();
+      const finalWId = whisperRow?.id || wId;
+      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>فقط ${targetUser.first_name || targetUser.username} يمكنه قراءتها</i>`, { inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${finalWId}:${targetUser.id}` }]] });
       break;
     }
   }
@@ -897,11 +903,29 @@ async function handleCallback(supabase: any, cq: any) {
     } else {
       await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `❌ خطأ! الرقم كان ${answer}`, show_alert: true });
     }
-  } else if (data.startsWith('whisper_')) {
-    const [, wId, tId] = data.split('_');
-    if (String(userId) !== tId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ مش لك!', show_alert: true }); return; }
+  } else if (data.startsWith('wh:') || data.startsWith('whisper_')) {
+    let wId: string, tId: string;
+    if (data.startsWith('wh:')) {
+      const parts = data.split(':');
+      wId = parts[1]; tId = parts[2];
+    } else {
+      // Legacy format: whisper_UUID_targetId - UUID has dashes so we need special parsing
+      const withoutPrefix = data.substring(8); // remove 'whisper_'
+      tId = withoutPrefix.substring(withoutPrefix.lastIndexOf('_') + 1);
+      wId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
+    }
+    if (String(userId) !== tId) {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '🔒 هذه الهمسة ليست لك! فقط الشخص المقصود يمكنه قراءتها.', show_alert: true });
+      return;
+    }
     const { data: w } = await supabase.from('telegram_whispers').select('message, from_username').eq('id', wId).single();
-    if (w) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: `💌 من ${w.from_username}:\n${w.message}`, show_alert: true }); await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId); }
+    if (w) {
+      const whisperText = `💌 همسة من ${w.from_username}:\n\n${w.message}`;
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: whisperText.slice(0, 200), show_alert: true });
+      await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId);
+    } else {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ الهمسة غير موجودة أو تم حذفها', show_alert: true });
+    }
   } else if (data.startsWith('captcha_')) {
     const [, memberId, result] = data.split('_');
     if (String(userId) !== memberId) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ ليس لك!', show_alert: true }); return; }
