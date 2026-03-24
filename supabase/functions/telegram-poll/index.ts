@@ -453,9 +453,9 @@ async function handleCommand(supabase: any, update: any) {
     // ==================== BASIC COMMANDS ====================
     case '/start':
       if (msg.chat.type === 'private') {
-        // Check for whisper deep link: /start whisper_PENDING_ID
+        // Check for whisper deep link: /start whisper-PENDING_ID
         const startParam = args[0] || '';
-        if (startParam.startsWith('whisper_')) {
+        if (startParam.startsWith('whisper-')) {
           const pendingId = startParam.substring(8);
           const { data: pending } = await supabase.from('telegram_pending_whispers').select('*').eq('id', pendingId).eq('from_user_id', userId).single();
           if (pending) {
