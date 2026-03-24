@@ -930,7 +930,7 @@ async function handleCommand(supabase: any, update: any) {
       if (pendingW) {
         // Send inline button to redirect user to bot private chat
         await sendMsg(chatId, `💌 <b>${username}</b> يريد إرسال همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>اضغط الزر لكتابة الهمسة</i>`, {
-          inline_keyboard: [[{ text: '✍️ اكتب الهمسة', url: `https://t.me/${botUsername}?start=whisper__${pendingW.id}` }]]
+          inline_keyboard: [[{ text: '✍️ اكتب الهمسة', url: `https://t.me/${botUsername}?start=whisper-${pendingW.id}` }]]
         });
       }
       break;
