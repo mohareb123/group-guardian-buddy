@@ -874,17 +874,31 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     case '/whisper': {
+      if (msg.chat.type === 'private') {
+        await sendMsg(chatId, '❌ استخدم هذا الأمر في المجموعة بالرد على رسالة الشخص');
+        break;
+      }
       if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص الذي تريد إرسال همسة له'); break; }
-      if (msg.chat.type === 'private') break;
       if (targetUser.is_bot) { await sendMsg(chatId, '❌ لا يمكنك إرسال همسة لبوت'); break; }
-      const whisperMsg = args.join(' ');
-      if (!whisperMsg) { await sendMsg(chatId, '❌ اكتب الرسالة بعد الأمر:\n<code>/whisper مرحبا</code>', undefined, msg.message_id); break; }
-      const wId = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-      await supabase.from('telegram_whispers').insert({ chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: whisperMsg });
+      
+      // Delete the /whisper command immediately so no one sees it
       try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-      const { data: whisperRow } = await supabase.from('telegram_whispers').select('id').eq('from_user_id', userId).eq('to_user_id', targetUser.id).eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1).single();
-      const finalWId = whisperRow?.id || wId;
-      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>فقط ${targetUser.first_name || targetUser.username} يمكنه قراءتها</i>`, { inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${finalWId}:${targetUser.id}` }]] });
+      
+      // Create pending whisper record
+      const { data: pendingW } = await supabase.from('telegram_pending_whispers').insert({
+        from_user_id: userId,
+        from_username: username,
+        to_user_id: targetUser.id,
+        to_username: targetUser.username || targetUser.first_name || String(targetUser.id),
+        chat_id: chatId,
+      }).select('id').single();
+      
+      if (pendingW) {
+        // Send inline button to redirect user to bot private chat
+        await sendMsg(chatId, `💌 <b>${username}</b> يريد إرسال همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>اضغط الزر لكتابة الهمسة</i>`, {
+          inline_keyboard: [[{ text: '✍️ اكتب الهمسة', url: `https://t.me/${botUsername}?start=whisper__${pendingW.id}` }]]
+        });
+      }
       break;
     }
   }
