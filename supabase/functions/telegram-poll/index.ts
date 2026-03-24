@@ -862,11 +862,17 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     case '/whisper': {
-      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص'); break; }
+      if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص الذي تريد إرسال همسة له'); break; }
       if (msg.chat.type === 'private') break;
-      const wId = crypto.randomUUID();
-      await supabase.from('telegram_whispers').insert({ id: wId, chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: args.join(' ') || '❤️' });
-      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة لـ <b>${targetUser.first_name || targetUser.username}</b>`, { inline_keyboard: [[{ text: '👁 عرض', callback_data: `whisper_${wId}_${targetUser.id}` }]] });
+      if (targetUser.is_bot) { await sendMsg(chatId, '❌ لا يمكنك إرسال همسة لبوت'); break; }
+      const whisperMsg = args.join(' ');
+      if (!whisperMsg) { await sendMsg(chatId, '❌ اكتب الرسالة بعد الأمر:\n<code>/whisper مرحبا</code>', undefined, msg.message_id); break; }
+      const wId = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+      await supabase.from('telegram_whispers').insert({ chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: whisperMsg });
+      try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+      const { data: whisperRow } = await supabase.from('telegram_whispers').select('id').eq('from_user_id', userId).eq('to_user_id', targetUser.id).eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1).single();
+      const finalWId = whisperRow?.id || wId;
+      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>فقط ${targetUser.first_name || targetUser.username} يمكنه قراءتها</i>`, { inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${finalWId}:${targetUser.id}` }]] });
       break;
     }
   }
