@@ -360,6 +360,36 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_pending_whispers: {
+        Row: {
+          chat_id: number
+          created_at: string
+          from_user_id: number
+          from_username: string | null
+          id: string
+          to_user_id: number
+          to_username: string | null
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          from_user_id: number
+          from_username?: string | null
+          id?: string
+          to_user_id: number
+          to_username?: string | null
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          from_user_id?: number
+          from_username?: string | null
+          id?: string
+          to_user_id?: number
+          to_username?: string | null
+        }
+        Relationships: []
+      }
       telegram_purchases: {
         Row: {
           chat_id: number
