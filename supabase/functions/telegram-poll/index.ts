@@ -382,6 +382,45 @@ async function handleCommand(supabase: any, update: any) {
   let botId: number | null = null;
   try { const me = await tgCall('getMe', {}); botId = me.result?.id || null; } catch {}
 
+  // Handle private messages - check for pending whispers first
+  if (!text.startsWith('/') && msg.chat.type === 'private') {
+    // Check if user has a pending whisper
+    const { data: pendingWhisper } = await supabase.from('telegram_pending_whispers')
+      .select('*')
+      .eq('from_user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (pendingWhisper) {
+      // Save the whisper
+      const { data: whisperRow } = await supabase.from('telegram_whispers').insert({
+        chat_id: pendingWhisper.chat_id,
+        from_user_id: userId,
+        from_username: pendingWhisper.from_username,
+        to_user_id: pendingWhisper.to_user_id,
+        to_username: pendingWhisper.to_username,
+        message: text,
+      }).select('id').single();
+
+      // Delete the pending whisper
+      await supabase.from('telegram_pending_whispers').delete().eq('id', pendingWhisper.id);
+
+      if (whisperRow) {
+        // Send the whisper button in the group
+        await sendMsg(pendingWhisper.chat_id, `💌 <b>${pendingWhisper.from_username}</b> أرسل همسة سرية لـ <b>${pendingWhisper.to_username}</b>\n\n<i>فقط ${pendingWhisper.to_username} يمكنه قراءتها</i>`, {
+          inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${whisperRow.id}:${pendingWhisper.to_user_id}` }]]
+        });
+        // Confirm to sender
+        await sendMsg(chatId, `✅ تم إرسال الهمسة بنجاح لـ <b>${pendingWhisper.to_username}</b> في المجموعة!`);
+      } else {
+        await sendMsg(chatId, '❌ حدث خطأ أثناء إرسال الهمسة. حاول مرة أخرى.');
+      }
+      return;
+    }
+    return; // Ignore other private non-command messages
+  }
+
   // Fadi AI responds to ALL non-command messages in groups
   if (!text.startsWith('/') && msg.chat.type !== 'private') {
     // Give points/coins first
@@ -393,11 +432,6 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     // Determine if Fadi should respond:
-    // 1. Message mentions فادي/Fadi
-    // 2. Message is a reply to the bot's message
-    // 3. Message has a photo (AI vision)
-    // 4. Message is a question (ends with ?)
-    // 5. Message mentions the bot by @username
     const mentionsFadi = text && (text.includes('فادي') || text.toLowerCase().includes('fadi'));
     const isReplyToBot = replyMsg && botId && replyMsg.from?.id === botId;
     const hasPhoto = !!(msg.photo && msg.photo.length > 0);
