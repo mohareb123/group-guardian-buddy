@@ -419,12 +419,24 @@ async function handleCommand(supabase: any, update: any) {
     // ==================== BASIC COMMANDS ====================
     case '/start':
       if (msg.chat.type === 'private') {
-        await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات الأذكى</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي (فادي)\n💰 نظام اقتصادي (عملات + متجر)\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n⚖️ نظام محكمة ديموقراطي\n\n📋 اكتب /help للأوامر`, {
-          inline_keyboard: [
-            [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
-            [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
-          ],
-        });
+        // Check for whisper deep link: /start whisper_PENDING_ID
+        const startParam = args[0] || '';
+        if (startParam.startsWith('whisper_')) {
+          const pendingId = startParam.substring(8);
+          const { data: pending } = await supabase.from('telegram_pending_whispers').select('*').eq('id', pendingId).eq('from_user_id', userId).single();
+          if (pending) {
+            await sendMsg(chatId, `💌 <b>أرسل همسة سرية لـ ${pending.to_username}</b>\n\n✍️ اكتب رسالتك الآن وسيتم إرسالها كهمسة سرية في المجموعة.\n\n<i>فقط ${pending.to_username} سيتمكن من قراءتها</i>`);
+          } else {
+            await sendMsg(chatId, '❌ انتهت صلاحية الهمسة. أعد المحاولة من المجموعة.');
+          }
+        } else {
+          await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات الأذكى</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي (فادي)\n💰 نظام اقتصادي (عملات + متجر)\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n⚖️ نظام محكمة ديموقراطي\n\n📋 اكتب /help للأوامر`, {
+            inline_keyboard: [
+              [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
+              [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
+            ],
+          });
+        }
       } else {
         await sendMsg(chatId, `🤖 <b>أنا جاهز!</b> 🧠 تكلم مع <b>فادي</b> أو اكتب /help`, { inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       }
