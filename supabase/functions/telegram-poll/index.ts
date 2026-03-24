@@ -382,6 +382,45 @@ async function handleCommand(supabase: any, update: any) {
   let botId: number | null = null;
   try { const me = await tgCall('getMe', {}); botId = me.result?.id || null; } catch {}
 
+  // Handle private messages - check for pending whispers first
+  if (!text.startsWith('/') && msg.chat.type === 'private') {
+    // Check if user has a pending whisper
+    const { data: pendingWhisper } = await supabase.from('telegram_pending_whispers')
+      .select('*')
+      .eq('from_user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (pendingWhisper) {
+      // Save the whisper
+      const { data: whisperRow } = await supabase.from('telegram_whispers').insert({
+        chat_id: pendingWhisper.chat_id,
+        from_user_id: userId,
+        from_username: pendingWhisper.from_username,
+        to_user_id: pendingWhisper.to_user_id,
+        to_username: pendingWhisper.to_username,
+        message: text,
+      }).select('id').single();
+
+      // Delete the pending whisper
+      await supabase.from('telegram_pending_whispers').delete().eq('id', pendingWhisper.id);
+
+      if (whisperRow) {
+        // Send the whisper button in the group
+        await sendMsg(pendingWhisper.chat_id, `💌 <b>${pendingWhisper.from_username}</b> أرسل همسة سرية لـ <b>${pendingWhisper.to_username}</b>\n\n<i>فقط ${pendingWhisper.to_username} يمكنه قراءتها</i>`, {
+          inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${whisperRow.id}:${pendingWhisper.to_user_id}` }]]
+        });
+        // Confirm to sender
+        await sendMsg(chatId, `✅ تم إرسال الهمسة بنجاح لـ <b>${pendingWhisper.to_username}</b> في المجموعة!`);
+      } else {
+        await sendMsg(chatId, '❌ حدث خطأ أثناء إرسال الهمسة. حاول مرة أخرى.');
+      }
+      return;
+    }
+    return; // Ignore other private non-command messages
+  }
+
   // Fadi AI responds to ALL non-command messages in groups
   if (!text.startsWith('/') && msg.chat.type !== 'private') {
     // Give points/coins first
@@ -393,11 +432,6 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     // Determine if Fadi should respond:
-    // 1. Message mentions فادي/Fadi
-    // 2. Message is a reply to the bot's message
-    // 3. Message has a photo (AI vision)
-    // 4. Message is a question (ends with ?)
-    // 5. Message mentions the bot by @username
     const mentionsFadi = text && (text.includes('فادي') || text.toLowerCase().includes('fadi'));
     const isReplyToBot = replyMsg && botId && replyMsg.from?.id === botId;
     const hasPhoto = !!(msg.photo && msg.photo.length > 0);
@@ -419,12 +453,24 @@ async function handleCommand(supabase: any, update: any) {
     // ==================== BASIC COMMANDS ====================
     case '/start':
       if (msg.chat.type === 'private') {
-        await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات الأذكى</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي (فادي)\n💰 نظام اقتصادي (عملات + متجر)\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n⚖️ نظام محكمة ديموقراطي\n\n📋 اكتب /help للأوامر`, {
-          inline_keyboard: [
-            [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
-            [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
-          ],
-        });
+        // Check for whisper deep link: /start whisper-PENDING_ID
+        const startParam = args[0] || '';
+        if (startParam.startsWith('whisper-')) {
+          const pendingId = startParam.substring(8);
+          const { data: pending } = await supabase.from('telegram_pending_whispers').select('*').eq('id', pendingId).eq('from_user_id', userId).single();
+          if (pending) {
+            await sendMsg(chatId, `💌 <b>أرسل همسة سرية لـ ${pending.to_username}</b>\n\n✍️ اكتب رسالتك الآن وسيتم إرسالها كهمسة سرية في المجموعة.\n\n<i>فقط ${pending.to_username} سيتمكن من قراءتها</i>`);
+          } else {
+            await sendMsg(chatId, '❌ انتهت صلاحية الهمسة. أعد المحاولة من المجموعة.');
+          }
+        } else {
+          await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات الأذكى</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي (فادي)\n💰 نظام اقتصادي (عملات + متجر)\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n⚖️ نظام محكمة ديموقراطي\n\n📋 اكتب /help للأوامر`, {
+            inline_keyboard: [
+              [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
+              [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
+            ],
+          });
+        }
       } else {
         await sendMsg(chatId, `🤖 <b>أنا جاهز!</b> 🧠 تكلم مع <b>فادي</b> أو اكتب /help`, { inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       }
@@ -862,17 +908,31 @@ async function handleCommand(supabase: any, update: any) {
     }
 
     case '/whisper': {
+      if (msg.chat.type === 'private') {
+        await sendMsg(chatId, '❌ استخدم هذا الأمر في المجموعة بالرد على رسالة الشخص');
+        break;
+      }
       if (!targetUser) { await sendMsg(chatId, '❌ رد على رسالة الشخص الذي تريد إرسال همسة له'); break; }
-      if (msg.chat.type === 'private') break;
       if (targetUser.is_bot) { await sendMsg(chatId, '❌ لا يمكنك إرسال همسة لبوت'); break; }
-      const whisperMsg = args.join(' ');
-      if (!whisperMsg) { await sendMsg(chatId, '❌ اكتب الرسالة بعد الأمر:\n<code>/whisper مرحبا</code>', undefined, msg.message_id); break; }
-      const wId = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-      await supabase.from('telegram_whispers').insert({ chat_id: chatId, from_user_id: userId, from_username: username, to_user_id: targetUser.id, to_username: targetUser.username || targetUser.first_name || '', message: whisperMsg });
+      
+      // Delete the /whisper command immediately so no one sees it
       try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-      const { data: whisperRow } = await supabase.from('telegram_whispers').select('id').eq('from_user_id', userId).eq('to_user_id', targetUser.id).eq('chat_id', chatId).order('created_at', { ascending: false }).limit(1).single();
-      const finalWId = whisperRow?.id || wId;
-      await sendMsg(chatId, `💌 <b>${username}</b> أرسل همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>فقط ${targetUser.first_name || targetUser.username} يمكنه قراءتها</i>`, { inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${finalWId}:${targetUser.id}` }]] });
+      
+      // Create pending whisper record
+      const { data: pendingW } = await supabase.from('telegram_pending_whispers').insert({
+        from_user_id: userId,
+        from_username: username,
+        to_user_id: targetUser.id,
+        to_username: targetUser.username || targetUser.first_name || String(targetUser.id),
+        chat_id: chatId,
+      }).select('id').single();
+      
+      if (pendingW) {
+        // Send inline button to redirect user to bot private chat
+        await sendMsg(chatId, `💌 <b>${username}</b> يريد إرسال همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>\n\n<i>اضغط الزر لكتابة الهمسة</i>`, {
+          inline_keyboard: [[{ text: '✍️ اكتب الهمسة', url: `https://t.me/${botUsername}?start=whisper-${pendingW.id}` }]]
+        });
+      }
       break;
     }
   }
