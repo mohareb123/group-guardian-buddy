@@ -383,42 +383,48 @@ async function handleCommand(supabase: any, update: any) {
   try { const me = await tgCall('getMe', {}); botId = me.result?.id || null; } catch {}
 
   // Handle private messages - check for pending whispers first
-  if (!text.startsWith('/') && msg.chat.type === 'private') {
-    // Check if user has a pending whisper
-    const { data: pendingWhisper } = await supabase.from('telegram_pending_whispers')
-      .select('*')
-      .eq('from_user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+  if (msg.chat.type === 'private') {
+    const whisperContent = (msg.text ?? msg.caption ?? '').trim();
 
-    if (pendingWhisper) {
-      // Save the whisper
-      const { data: whisperRow } = await supabase.from('telegram_whispers').insert({
-        chat_id: pendingWhisper.chat_id,
-        from_user_id: userId,
-        from_username: pendingWhisper.from_username,
-        to_user_id: pendingWhisper.to_user_id,
-        to_username: pendingWhisper.to_username,
-        message: text,
-      }).select('id').single();
+    if (!whisperContent.startsWith('/')) {
+      const { data: pendingWhisper } = await supabase.from('telegram_pending_whispers')
+        .select('*')
+        .eq('from_user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-      // Delete the pending whisper
-      await supabase.from('telegram_pending_whispers').delete().eq('id', pendingWhisper.id);
+      if (pendingWhisper) {
+        if (!whisperContent) {
+          await sendMsg(chatId, '✍️ اكتب نص الهمسة في رسالة عادية أو أرسل صورة ومعها caption، ولن يتم حفظ رسالة فارغة.');
+          return;
+        }
 
-      if (whisperRow) {
-        // Send the whisper button in the group
-        await sendMsg(pendingWhisper.chat_id, `💌 <b>${pendingWhisper.from_username}</b> أرسل همسة سرية لـ <b>${pendingWhisper.to_username}</b>\n\n<i>فقط ${pendingWhisper.to_username} يمكنه قراءتها</i>`, {
-          inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${whisperRow.id}:${pendingWhisper.to_user_id}` }]]
-        });
-        // Confirm to sender
-        await sendMsg(chatId, `✅ تم إرسال الهمسة بنجاح لـ <b>${pendingWhisper.to_username}</b> في المجموعة!`);
-      } else {
-        await sendMsg(chatId, '❌ حدث خطأ أثناء إرسال الهمسة. حاول مرة أخرى.');
+        const { data: whisperRow } = await supabase.from('telegram_whispers').insert({
+          chat_id: pendingWhisper.chat_id,
+          from_user_id: userId,
+          from_username: pendingWhisper.from_username,
+          to_user_id: pendingWhisper.to_user_id,
+          to_username: pendingWhisper.to_username,
+          message: whisperContent,
+        }).select('id').single();
+
+        await supabase.from('telegram_pending_whispers').delete().eq('id', pendingWhisper.id);
+
+        if (whisperRow) {
+          await sendMsg(pendingWhisper.chat_id, `💌 <b>${pendingWhisper.from_username}</b> أرسل همسة سرية لـ <b>${pendingWhisper.to_username}</b>\n\n<i>فقط ${pendingWhisper.to_username} يمكنه قراءتها</i>`, {
+            inline_keyboard: [[{ text: '👁 اضغط لقراءة الهمسة', callback_data: `wh:${whisperRow.id}:${pendingWhisper.to_user_id}` }]]
+          });
+          await sendMsg(chatId, `✅ تم إرسال الهمسة بنجاح لـ <b>${pendingWhisper.to_username}</b> في المجموعة!`);
+        } else {
+          await sendMsg(chatId, '❌ حدث خطأ أثناء إرسال الهمسة. حاول مرة أخرى.');
+        }
+
+        return;
       }
-      return;
+
+      return; // Ignore other private non-command messages
     }
-    return; // Ignore other private non-command messages
   }
 
   // Fadi AI responds to ALL non-command messages in groups
@@ -980,7 +986,8 @@ async function handleCallback(supabase: any, cq: any) {
     }
     const { data: w } = await supabase.from('telegram_whispers').select('message, from_username').eq('id', wId).single();
     if (w) {
-      const whisperText = `💌 همسة من ${w.from_username}:\n\n${w.message}`;
+      const whisperBody = (w.message || '').trim();
+      const whisperText = `💌 همسة من ${w.from_username}:\n\n${whisperBody || '⚠️ الهمسة فارغة أو لم يتم حفظ محتواها بشكل صحيح.'}`;
       await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: whisperText.slice(0, 200), show_alert: true });
       await supabase.from('telegram_whispers').update({ is_read: true }).eq('id', wId);
     } else {
