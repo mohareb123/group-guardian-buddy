@@ -386,10 +386,7 @@ async function handleCommand(supabase: any, update: any) {
   if (msg.chat.type === 'private') {
     const whisperContent = (msg.text ?? msg.caption ?? '').trim();
 
-    if (whisperContent.startsWith('/')) {
-      // Let private commands continue to the command switch below
-    } else {
-    // Check if user has a pending whisper
+    if (!whisperContent.startsWith('/')) {
       const { data: pendingWhisper } = await supabase.from('telegram_pending_whispers')
         .select('*')
         .eq('from_user_id', userId)
@@ -422,9 +419,9 @@ async function handleCommand(supabase: any, update: any) {
         } else {
           await sendMsg(chatId, '❌ حدث خطأ أثناء إرسال الهمسة. حاول مرة أخرى.');
         }
+
         return;
       }
-    }
 
       return; // Ignore other private non-command messages
     }
