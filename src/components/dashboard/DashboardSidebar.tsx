@@ -19,6 +19,7 @@ const menuItems: { id: PanelId; label: string; icon: React.ElementType }[] = [
   { id: "tickets", label: "التذاكر", icon: Ticket },
   { id: "logs", label: "السجلات", icon: Shield },
   { id: "whispers", label: "الهمسات", icon: Zap },
+  { id: "broadcast", label: "البث", icon: Megaphone },
   { id: "entertainment", label: "الترفيه", icon: Gamepad2 },
   { id: "settings", label: "الإعدادات", icon: Settings },
 ];
