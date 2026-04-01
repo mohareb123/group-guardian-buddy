@@ -9,8 +9,9 @@ import EntertainmentPanel from "@/components/dashboard/EntertainmentPanel";
 import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import EconomyPanel from "@/components/dashboard/EconomyPanel";
 import TicketsPanel from "@/components/dashboard/TicketsPanel";
+import BroadcastPanel from "@/components/dashboard/BroadcastPanel";
 
-export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets";
+export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets" | "broadcast";
 
 const Index = () => {
   const [activePanel, setActivePanel] = useState<PanelId>("home");
@@ -26,6 +27,7 @@ const Index = () => {
       case "entertainment": return <EntertainmentPanel />;
       case "economy": return <EconomyPanel />;
       case "tickets": return <TicketsPanel />;
+      case "broadcast": return <BroadcastPanel />;
       case "settings": return <SettingsPanel />;
       default: return <DashboardHome />;
     }
