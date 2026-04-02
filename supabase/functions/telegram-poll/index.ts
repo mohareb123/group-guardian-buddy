@@ -271,31 +271,78 @@ const trustNames = ['🆕 جديد', '🌱 مبتدئ', '🌿 نشط', '🌳 م�
 
 async function searchBooks(query: string): Promise<string> {
   try {
-    const result = await callAI(
-      `ابحث عن كتب PDF بعنوان أو موضوع: "${query}". اعرض أفضل 5 كتب مع المؤلف ووصف مختصر ورابط تحميل مباشر إن أمكن.`,
-      'أنت محرك بحث متخصص في الكتب العربية والإنجليزية. اعرض النتائج بتنسيق واضح مع أرقام. لا تمزح. كن دقيقاً.'
-    );
-    return result || 'لم يتم العثور على نتائج.';
+    // Use real Google Books API
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5&langRestrict=ar`);
+    if (!res.ok) {
+      // Fallback: try without language restriction
+      const res2 = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
+      if (!res2.ok) return '❌ فشل الاتصال بمحرك البحث.';
+      const data2 = await res2.json();
+      return formatBooks(data2);
+    }
+    const data = await res.json();
+    if (!data.items || data.items.length === 0) {
+      // Retry without lang restriction
+      const res2 = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
+      const data2 = await res2.json();
+      return formatBooks(data2);
+    }
+    return formatBooks(data);
   } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
+}
+
+function formatBooks(data: any): string {
+  if (!data.items || data.items.length === 0) return 'لم يتم العثور على نتائج.';
+  return data.items.map((item: any, i: number) => {
+    const info = item.volumeInfo;
+    const title = info.title || 'بدون عنوان';
+    const authors = info.authors?.join(', ') || 'غير معروف';
+    const desc = info.description?.substring(0, 100) || '';
+    const link = info.infoLink || info.previewLink || '';
+    const pdf = info.accessInfo?.pdf?.acsTokenLink ? '📥 PDF متاح' : '';
+    return `${i + 1}. <b>${title}</b>\n   ✍️ ${authors}\n   ${desc}${desc ? '...' : ''}\n   🔗 <a href="${link}">رابط الكتاب</a> ${pdf}`;
+  }).join('\n\n');
 }
 
 async function searchYouTube(query: string): Promise<string> {
   try {
-    const result = await callAI(
-      `ابحث عن أفضل فيديوهات يوتيوب عن: "${query}". اعرض أفضل 5 فيديوهات مع عنوان كل فيديو ورابطه واسم القناة ومدة الفيديو التقريبية.`,
-      'أنت محرك بحث متخصص في يوتيوب. اعرض النتائج مع روابط يوتيوب حقيقية بتنسيق واضح. لا تمزح.'
-    );
-    return result || 'لم يتم العثور على نتائج.';
+    // Use AI with web_search to get real YouTube results
+    const res = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        web_search_options: { search_context_size: 'high' },
+        messages: [
+          { role: 'system', content: 'أنت مساعد بحث. ابحث في يوتيوب واعرض النتائج الحقيقية فقط. لا تختلق أي روابط. اعرض فقط ما تجده فعلاً.' },
+          { role: 'user', content: `ابحث في يوتيوب عن: "${query}". اعرض أفضل 5 فيديوهات حقيقية مع:\n- عنوان الفيديو\n- رابط يوتيوب الحقيقي\n- اسم القناة\nاستخدم تنسيق HTML بسيط مع <b> و <a href>.` }
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`AI error: ${res.status}`);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || 'لم يتم العثور على نتائج.';
   } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
 }
 
 async function searchWeb(query: string): Promise<string> {
   try {
-    const result = await callAI(
-      `ابحث في الويب عن: "${query}". اعرض أفضل 5 نتائج مع عنوان كل نتيجة ورابط الموقع ووصف مختصر للمحتوى.`,
-      'أنت محرك بحث ويب. اعرض النتائج بتنسيق واضح مع أرقام وروابط. اذكر المصادر التي بحثت فيها. لا تمزح.'
-    );
-    return result || 'لم يتم العثور على نتائج.';
+    // Use AI with web_search for real web results
+    const res = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        web_search_options: { search_context_size: 'high' },
+        messages: [
+          { role: 'system', content: 'أنت مساعد بحث ويب. ابحث واعرض النتائج الحقيقية فقط مع روابط المواقع الفعلية. لا تختلق أي شيء.' },
+          { role: 'user', content: `ابحث في الويب عن: "${query}". اعرض أفضل 5 نتائج حقيقية مع:\n- عنوان النتيجة\n- رابط الموقع الحقيقي\n- وصف مختصر\n- اذكر المصادر في النهاية\nاستخدم تنسيق HTML بسيط مع <b> و <a href>.` }
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`AI error: ${res.status}`);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || 'لم يتم العثور على نتائج.';
   } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
 }
 
