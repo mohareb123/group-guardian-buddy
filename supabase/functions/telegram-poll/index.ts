@@ -99,6 +99,118 @@ async function safeRpc(supabase: any, fn: string, params: any) {
   try { await supabase.rpc(fn, params); } catch (e) { console.error(`rpc ${fn} error:`, e); }
 }
 
+type SearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
+};
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ');
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x2F;/g, '/');
+}
+
+function cleanText(value: string | undefined, maxLength = 180): string {
+  const normalized = decodeHtmlEntities(stripHtml(value || '')).replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+function decodeDuckDuckGoUrl(rawHref: string): string | null {
+  const href = decodeHtmlEntities(rawHref).trim();
+  const normalized = href.startsWith('//')
+    ? `https:${href}`
+    : href.startsWith('/')
+      ? `https://duckduckgo.com${href}`
+      : href;
+
+  try {
+    const url = new URL(normalized);
+    const redirected = url.searchParams.get('uddg');
+    return redirected ? decodeURIComponent(redirected) : normalized;
+  } catch {
+    return null;
+  }
+}
+
+function formatSearchResults(items: SearchResult[]): string {
+  if (items.length === 0) return 'لم يتم العثور على نتائج.';
+
+  const output = items.slice(0, 5).map((item, index) => {
+    const lines = [`${index + 1}. <b>${escapeHtml(item.title)}</b>`, `🔗 <a href="${escapeHtml(item.url)}">فتح النتيجة</a>`];
+    if (item.snippet) lines.push(`📝 ${escapeHtml(item.snippet)}`);
+    return lines.join('\n');
+  }).join('\n\n');
+
+  return output.length > 3800 ? `${output.slice(0, 3797)}...` : output;
+}
+
+async function duckSearch(query: string, options: { youtubeOnly?: boolean } = {}): Promise<SearchResult[]> {
+  const searchQuery = options.youtubeOnly ? `site:youtube.com ${query}` : query;
+  const res = await fetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(searchQuery)}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; LovableBot/1.0)',
+      'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+    },
+  });
+
+  if (!res.ok) throw new Error(`DuckDuckGo search failed [${res.status}]`);
+
+  const html = await res.text();
+  const blocks = html.match(/<div class="result\b[\s\S]*?<div class="clear"><\/div>\s*<\/div>\s*<\/div>/g) || [];
+  const items: SearchResult[] = [];
+  const seen = new Set<string>();
+
+  for (const block of blocks) {
+    if (block.includes('result--ad')) continue;
+
+    const titleMatch = block.match(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!titleMatch) continue;
+
+    const url = decodeDuckDuckGoUrl(titleMatch[1]);
+    if (!url || seen.has(url)) continue;
+
+    if (options.youtubeOnly) {
+      try {
+        const hostname = new URL(url).hostname.replace(/^www\./, '');
+        if (!(hostname.includes('youtube.com') || hostname === 'youtu.be')) continue;
+      } catch {
+        continue;
+      }
+    }
+
+    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>|<div class="result__snippet"[^>]*>([\s\S]*?)<\/div>/);
+    const title = cleanText(titleMatch[2], 140);
+    const snippet = cleanText(snippetMatch?.[1] || snippetMatch?.[2] || '', 180);
+
+    if (!title) continue;
+
+    seen.add(url);
+    items.push({ title, url, snippet });
+    if (items.length >= 5) break;
+  }
+
+  return items;
+}
+
 // ==================== AUTO-REPLIES ====================
 
 const AUTO_REPLIES: Record<string, string> = {
@@ -271,10 +383,8 @@ const trustNames = ['🆕 جديد', '🌱 مبتدئ', '🌿 نشط', '🌳 م�
 
 async function searchBooks(query: string): Promise<string> {
   try {
-    // Use real Google Books API
     const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5&langRestrict=ar`);
     if (!res.ok) {
-      // Fallback: try without language restriction
       const res2 = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
       if (!res2.ok) return '❌ فشل الاتصال بمحرك البحث.';
       const data2 = await res2.json();
@@ -282,68 +392,55 @@ async function searchBooks(query: string): Promise<string> {
     }
     const data = await res.json();
     if (!data.items || data.items.length === 0) {
-      // Retry without lang restriction
       const res2 = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
       const data2 = await res2.json();
       return formatBooks(data2);
     }
     return formatBooks(data);
-  } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
+  } catch (error) {
+    console.error('Book search error:', error);
+    return '❌ فشل البحث. حاول لاحقاً.';
+  }
 }
 
 function formatBooks(data: any): string {
   if (!data.items || data.items.length === 0) return 'لم يتم العثور على نتائج.';
-  return data.items.map((item: any, i: number) => {
-    const info = item.volumeInfo;
-    const title = info.title || 'بدون عنوان';
-    const authors = info.authors?.join(', ') || 'غير معروف';
-    const desc = info.description?.substring(0, 100) || '';
+  const output = data.items.slice(0, 5).map((item: any, i: number) => {
+    const info = item.volumeInfo || {};
+    const title = cleanText(info.title || 'بدون عنوان', 120);
+    const authors = cleanText(info.authors?.join('، ') || 'غير معروف', 100);
+    const desc = cleanText(info.description || info.subtitle || '', 150);
     const link = info.infoLink || info.previewLink || '';
-    const pdf = info.accessInfo?.pdf?.acsTokenLink ? '📥 PDF متاح' : '';
-    return `${i + 1}. <b>${title}</b>\n   ✍️ ${authors}\n   ${desc}${desc ? '...' : ''}\n   🔗 <a href="${link}">رابط الكتاب</a> ${pdf}`;
+    const pdf = info.accessInfo?.pdf?.isAvailable || info.accessInfo?.pdf?.acsTokenLink;
+
+    const lines = [`${i + 1}. <b>${escapeHtml(title)}</b>`, `✍️ ${escapeHtml(authors)}`];
+    if (desc) lines.push(`📝 ${escapeHtml(desc)}`);
+    if (link) lines.push(`🔗 <a href="${escapeHtml(link)}">رابط الكتاب</a>`);
+    if (pdf) lines.push('📥 تتوفر معاينة أو نسخة قابلة للتنزيل');
+    return lines.join('\n');
   }).join('\n\n');
+
+  return output.length > 3800 ? `${output.slice(0, 3797)}...` : output;
 }
 
 async function searchYouTube(query: string): Promise<string> {
   try {
-    // Use AI with web_search to get real YouTube results
-    const res = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        web_search_options: { search_context_size: 'high' },
-        messages: [
-          { role: 'system', content: 'أنت مساعد بحث. ابحث في يوتيوب واعرض النتائج الحقيقية فقط. لا تختلق أي روابط. اعرض فقط ما تجده فعلاً.' },
-          { role: 'user', content: `ابحث في يوتيوب عن: "${query}". اعرض أفضل 5 فيديوهات حقيقية مع:\n- عنوان الفيديو\n- رابط يوتيوب الحقيقي\n- اسم القناة\nاستخدم تنسيق HTML بسيط مع <b> و <a href>.` }
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(`AI error: ${res.status}`);
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || 'لم يتم العثور على نتائج.';
-  } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
+    const results = await duckSearch(query, { youtubeOnly: true });
+    return formatSearchResults(results);
+  } catch (error) {
+    console.error('YouTube search error:', error);
+    return '❌ فشل البحث. حاول لاحقاً.';
+  }
 }
 
 async function searchWeb(query: string): Promise<string> {
   try {
-    // Use AI with web_search for real web results
-    const res = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        web_search_options: { search_context_size: 'high' },
-        messages: [
-          { role: 'system', content: 'أنت مساعد بحث ويب. ابحث واعرض النتائج الحقيقية فقط مع روابط المواقع الفعلية. لا تختلق أي شيء.' },
-          { role: 'user', content: `ابحث في الويب عن: "${query}". اعرض أفضل 5 نتائج حقيقية مع:\n- عنوان النتيجة\n- رابط الموقع الحقيقي\n- وصف مختصر\n- اذكر المصادر في النهاية\nاستخدم تنسيق HTML بسيط مع <b> و <a href>.` }
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(`AI error: ${res.status}`);
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || 'لم يتم العثور على نتائج.';
-  } catch { return '❌ فشل البحث. حاول لاحقاً.'; }
+    const results = await duckSearch(query);
+    return formatSearchResults(results);
+  } catch (error) {
+    console.error('Web search error:', error);
+    return '❌ فشل البحث. حاول لاحقاً.';
+  }
 }
 
 // ==================== MAIN COMMAND HANDLER ====================
@@ -505,6 +602,12 @@ async function handleCommand(supabase: any, update: any) {
 
   // ==================== PRIVATE MESSAGES - WHISPER HANDLING ====================
   if (msg.chat.type === 'private') {
+    if (msg.sticker?.file_id) {
+      const stickerSet = msg.sticker.set_name ? `\n🧩 الحزمة: <code>${escapeHtml(msg.sticker.set_name)}</code>` : '';
+      await sendMsg(chatId, `🏷️ هذا هو <code>file_id</code> الخاص بالملصق:\n<code>${escapeHtml(msg.sticker.file_id)}</code>${stickerSet}\n\nانسخه والصقه في خانة الملصق داخل الداشبورد.`);
+      return;
+    }
+
     const whisperContent = (msg.text ?? msg.caption ?? '').trim();
 
     if (!whisperContent.startsWith('/')) {
@@ -615,7 +718,9 @@ async function handleCommand(supabase: any, update: any) {
     case '/start':
       if (msg.chat.type === 'private') {
         const startParam = args[0] || '';
-        if (startParam.startsWith('whisper-')) {
+        if (startParam === 'sticker') {
+          await sendMsg(chatId, '🏷️ أرسل الملصق هنا مباشرة وسأعيد لك <code>file_id</code> الجاهز لاستخدامه في الداشبورد.');
+        } else if (startParam.startsWith('whisper-')) {
           const pendingId = startParam.substring(8);
           const { data: pending } = await supabase.from('telegram_pending_whispers').select('*').eq('id', pendingId).eq('from_user_id', userId).single();
           if (pending) {
@@ -637,7 +742,7 @@ async function handleCommand(supabase: any, update: any) {
       break;
 
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /nightmode /captcha /toxicity /slowmode\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
+      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /nightmode /captcha /toxicity /slowmode\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
       break;
 
     case '/dev': case '/developer': case '/owner':
@@ -1053,6 +1158,19 @@ async function handleCommand(supabase: any, update: any) {
         await sendMsg(chatId, `💌 <b>${username}</b> يريد إرسال همسة سرية لـ <b>${targetUser.first_name || targetUser.username}</b>`, {
           inline_keyboard: [[{ text: '✍️ اكتب الهمسة', url: `https://t.me/${botUsername}?start=whisper-${pendingW.id}` }]]
         });
+      }
+      break;
+    }
+
+    case '/sticker': case '/getsticker': {
+      if (msg.chat.type === 'private') {
+        await sendMsg(chatId, '🏷️ أرسل الملصق هنا مباشرة وسأعيد لك <code>file_id</code> الجاهز لاستخدامه في الداشبورد.');
+      } else if (botUsername) {
+        await sendMsg(chatId, '🏷️ للحصول على <code>file_id</code> للملصق، افتح الخاص مع البوت ثم أرسل الملصق هناك.', {
+          inline_keyboard: [[{ text: 'فتح البوت للملصقات', url: `https://t.me/${botUsername}?start=sticker` }]],
+        });
+      } else {
+        await sendMsg(chatId, '🏷️ افتح الخاص مع البوت وأرسل الملصق هناك للحصول على file_id.');
       }
       break;
     }

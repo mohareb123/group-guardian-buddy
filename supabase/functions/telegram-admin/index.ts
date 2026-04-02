@@ -38,18 +38,20 @@ Deno.serve(async (req) => {
         headers: tgHeaders,
         body: JSON.stringify(payload),
       });
-      return res.json();
+
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        throw new Error(`TG ${method} failed [${res.status}]: ${JSON.stringify(data)}`);
+      }
+
+      return data;
     }
 
     let result;
 
     switch (action) {
       case 'sendMessage':
-        result = await fetch(`${GATEWAY_URL}/sendMessage`, {
-          method: 'POST',
-          headers: tgHeaders,
-          body: JSON.stringify({ chat_id, text, parse_mode: 'HTML' }),
-        });
+        result = await tgCall('sendMessage', { chat_id, text, parse_mode: 'HTML' });
         break;
 
       case 'broadcast': {
@@ -107,34 +109,44 @@ Deno.serve(async (req) => {
 
         for (const t of targets) {
           try {
+            let sentResult: any;
+
             switch (type) {
               case 'text':
-                await tgCall('sendMessage', { chat_id: t.chat_id, text: `📢 <b>إشعار هام</b>\n\n${caption}`, parse_mode: 'HTML' });
+                sentResult = await tgCall('sendMessage', { chat_id: t.chat_id, text: `📢 <b>إشعار هام</b>\n\n${caption}`, parse_mode: 'HTML' });
                 break;
               case 'photo':
-                await tgCall('sendPhoto', { chat_id: t.chat_id, photo: file_url, caption: caption || undefined, parse_mode: 'HTML' });
+                sentResult = await tgCall('sendPhoto', { chat_id: t.chat_id, photo: file_url, caption: caption || undefined, parse_mode: 'HTML' });
                 break;
               case 'video':
-                await tgCall('sendVideo', { chat_id: t.chat_id, video: file_url, caption: caption || undefined, parse_mode: 'HTML' });
+                sentResult = await tgCall('sendVideo', { chat_id: t.chat_id, video: file_url, caption: caption || undefined, parse_mode: 'HTML' });
                 break;
               case 'audio':
-                await tgCall('sendVoice', { chat_id: t.chat_id, voice: file_url, caption: caption || undefined, parse_mode: 'HTML' });
+                sentResult = await tgCall('sendAudio', { chat_id: t.chat_id, audio: file_url, caption: caption || undefined, parse_mode: 'HTML' });
                 break;
               case 'document':
-                await tgCall('sendDocument', { chat_id: t.chat_id, document: file_url, caption: caption || undefined, parse_mode: 'HTML' });
+                sentResult = await tgCall('sendDocument', { chat_id: t.chat_id, document: file_url, caption: caption || undefined, parse_mode: 'HTML' });
                 break;
               case 'sticker':
-                await tgCall('sendSticker', { chat_id: t.chat_id, sticker: sticker_file_id });
+                sentResult = await tgCall('sendSticker', { chat_id: t.chat_id, sticker: sticker_file_id });
                 break;
               case 'poll':
-                await tgCall('sendPoll', { chat_id: t.chat_id, question: poll_question, options: poll_options.map((o: string) => ({ text: o })), is_anonymous: false });
+                sentResult = await tgCall('sendPoll', { chat_id: t.chat_id, question: poll_question, options: poll_options, is_anonymous: false });
                 break;
+              default:
+                throw new Error('نوع البث غير مدعوم');
             }
+
             sent++;
-            results.push({ chat_id: t.chat_id, title: t.title, status: 'sent' });
-          } catch {
+            results.push({ chat_id: t.chat_id, title: t.title, status: 'sent', message_id: sentResult?.result?.message_id ?? null });
+          } catch (error) {
             failed++;
-            results.push({ chat_id: t.chat_id, title: t.title, status: 'failed' });
+            results.push({
+              chat_id: t.chat_id,
+              title: t.title,
+              status: 'failed',
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
           }
         }
 
@@ -143,25 +155,57 @@ Deno.serve(async (req) => {
         });
       }
 
+      case 'delete_broadcast': {
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+
+        if (messages.length === 0) {
+          return new Response(JSON.stringify({ error: 'لا توجد رسائل للحذف', deleted: 0, failed: 0, results: [] }), {
+            status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        let deleted = 0, failed = 0;
+        const results: any[] = [];
+
+        for (const message of messages) {
+          try {
+            await tgCall('deleteMessage', { chat_id: message.chat_id, message_id: message.message_id });
+            deleted++;
+            results.push({ ...message, status: 'deleted' });
+          } catch (error) {
+            failed++;
+            results.push({
+              ...message,
+              status: 'failed',
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
+          }
+        }
+
+        return new Response(JSON.stringify({ ok: true, deleted, failed, results }), {
+          status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       case 'ban':
-        result = await fetch(`${GATEWAY_URL}/banChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id }) });
+        result = await tgCall('banChatMember', { chat_id, user_id });
         break;
 
       case 'unban':
-        result = await fetch(`${GATEWAY_URL}/unbanChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id, only_if_banned: true }) });
+        result = await tgCall('unbanChatMember', { chat_id, user_id, only_if_banned: true });
         break;
 
       case 'kick':
-        await fetch(`${GATEWAY_URL}/banChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id }) });
-        result = await fetch(`${GATEWAY_URL}/unbanChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id }) });
+        await tgCall('banChatMember', { chat_id, user_id });
+        result = await tgCall('unbanChatMember', { chat_id, user_id });
         break;
 
       case 'mute':
-        result = await fetch(`${GATEWAY_URL}/restrictChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id, permissions: { can_send_messages: false } }) });
+        result = await tgCall('restrictChatMember', { chat_id, user_id, permissions: { can_send_messages: false } });
         break;
 
       case 'unmute':
-        result = await fetch(`${GATEWAY_URL}/restrictChatMember`, { method: 'POST', headers: tgHeaders, body: JSON.stringify({ chat_id, user_id, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true } }) });
+        result = await tgCall('restrictChatMember', { chat_id, user_id, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true } });
         break;
 
       default:
@@ -170,9 +214,8 @@ Deno.serve(async (req) => {
         });
     }
 
-    const data = await result!.json();
-    return new Response(JSON.stringify(data), {
-      status: result!.ok ? 200 : 502,
+    return new Response(JSON.stringify(result), {
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {

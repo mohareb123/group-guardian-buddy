@@ -5,12 +5,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Megaphone, Send, CheckCircle, XCircle, Upload, Plus, Trash2 } from "lucide-react";
+import { Megaphone, Send, CheckCircle, XCircle, Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 type MessageType = "text" | "photo" | "video" | "audio" | "document" | "poll" | "sticker";
 type TargetAudience = "groups" | "users" | "all";
+
+const STICKER_HELP_LINK = "https://t.me/Groups12Masterbot?start=sticker";
 
 const BroadcastPanel = () => {
   const [messageType, setMessageType] = useState<MessageType>("text");
@@ -22,6 +24,7 @@ const BroadcastPanel = () => {
   const [pollOptions, setPollOptions] = useState(["", ""]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [groups, setGroups] = useState<any[]>([]);
   const [usersCount, setUsersCount] = useState(0);
   const [lastResult, setLastResult] = useState<any>(null);
@@ -47,6 +50,50 @@ const BroadcastPanel = () => {
       return data.publicUrl;
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDeleteLastBroadcast = async () => {
+    const sentMessages = (lastResult?.results || []).filter((item: any) => item.status === "sent" && item.message_id);
+
+    if (sentMessages.length === 0) {
+      toast.error("لا توجد رسائل قابلة للحذف");
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("telegram-admin", {
+        body: {
+          action: "delete_broadcast",
+          messages: sentMessages.map((item: any) => ({
+            chat_id: item.chat_id,
+            message_id: item.message_id,
+            title: item.title,
+          })),
+        },
+      });
+
+      if (error) throw error;
+
+      const deleteMap = new Map(
+        (data.results || []).map((item: any) => [`${item.chat_id}:${item.message_id}`, item.status])
+      );
+
+      setLastResult((prev: any) => prev ? {
+        ...prev,
+        deleteSummary: { deleted: data.deleted, failed: data.failed },
+        results: (prev.results || []).map((item: any) => ({
+          ...item,
+          delete_status: deleteMap.get(`${item.chat_id}:${item.message_id}`) || item.delete_status,
+        })),
+      } : prev);
+
+      toast.success(`تم حذف ${data.deleted} رسالة`);
+    } catch (e: any) {
+      toast.error("فشل حذف البث: " + (e.message || "خطأ غير معروف"));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -181,14 +228,21 @@ const BroadcastPanel = () => {
 
           {/* Sticker */}
           {messageType === "sticker" && (
-            <div>
+            <div className="space-y-2">
               <label className="text-sm font-medium mb-1 block">معرف الملصق (file_id)</label>
-              <Input
-                value={stickerFileId}
-                onChange={(e) => setStickerFileId(e.target.value)}
-                placeholder="أرسل الملصق للبوت في الخاص واحصل على الـ file_id"
-                dir="ltr"
-              />
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={stickerFileId}
+                  onChange={(e) => setStickerFileId(e.target.value)}
+                  placeholder="أرسل /sticker أو الملصق للبوت في الخاص ثم الصق الـ file_id هنا"
+                  dir="ltr"
+                  className="flex-1"
+                />
+                <Button type="button" variant="outline" asChild>
+                  <a href={STICKER_HELP_LINK} target="_blank" rel="noreferrer">افتح البوت</a>
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">البوت سيعيد لك file_id مباشرة عند إرسال الملصق له في الخاص.</p>
             </div>
           )}
 
@@ -253,25 +307,47 @@ const BroadcastPanel = () => {
             <CardTitle className="text-base">نتيجة آخر إرسال</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex gap-4 mb-4">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span className="text-sm">تم الإرسال: {lastResult.sent}</span>
-              </div>
-              {lastResult.failed > 0 && (
+            <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap gap-4">
                 <div className="flex items-center gap-2">
-                  <XCircle className="h-4 w-4 text-destructive" />
-                  <span className="text-sm">فشل: {lastResult.failed}</span>
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm">تم الإرسال: {lastResult.sent}</span>
                 </div>
-              )}
+                {lastResult.failed > 0 && (
+                  <div className="flex items-center gap-2">
+                    <XCircle className="h-4 w-4 text-destructive" />
+                    <span className="text-sm">فشل: {lastResult.failed}</span>
+                  </div>
+                )}
+                {lastResult.deleteSummary?.deleted > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="h-4 w-4 text-primary" />
+                    <span className="text-sm">تم الحذف: {lastResult.deleteSummary.deleted}</span>
+                  </div>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleDeleteLastBroadcast}
+                disabled={deleting || !(lastResult.results || []).some((item: any) => item.status === "sent" && item.message_id && item.delete_status !== "deleted")}
+              >
+                <Trash2 className="h-4 w-4 ml-2" />
+                {deleting ? "جاري الحذف..." : "حذف آخر بث"}
+              </Button>
             </div>
             {lastResult.results && (
               <div className="space-y-2 max-h-60 overflow-y-auto">
                 {lastResult.results.map((r: any, i: number) => (
                   <div key={i} className="flex items-center justify-between text-sm p-2 bg-muted/50 rounded">
                     <span className="truncate flex-1">{r.title || r.chat_id || r.user_id}</span>
-                    <Badge variant={r.status === "sent" ? "default" : "destructive"} className="mr-2">
-                      {r.status === "sent" ? "تم" : "فشل"}
+                    <Badge
+                      variant={r.delete_status === "deleted" ? "secondary" : r.status === "sent" ? "default" : "destructive"}
+                      className="mr-2"
+                    >
+                      {r.delete_status === "deleted" ? "محذوف" : r.status === "sent" ? "تم" : "فشل"}
                     </Badge>
                   </div>
                 ))}
