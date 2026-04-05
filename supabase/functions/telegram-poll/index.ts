@@ -342,16 +342,54 @@ async function checkToxicity(text: string): Promise<{ toxic: boolean; reason: st
   } catch { return { toxic: false, reason: '' }; }
 }
 
-// ==================== FEATURE 4: RAID DETECTION ====================
+// ==================== FEATURE 4: RAID DETECTION (DB-BASED) ====================
 
-const joinTracker: Record<number, number[]> = {};
+async function detectRaid(supabase: any, chatId: number, userId: number): Promise<boolean> {
+  // Record this join
+  await supabase.from('telegram_raid_joins').insert({ chat_id: chatId, user_id: userId });
+  // Cleanup old joins
+  await supabase.rpc('cleanup_old_raid_joins').catch(() => {});
+  // Count recent joins in last 60 seconds
+  const cutoff = new Date(Date.now() - 60000).toISOString();
+  const { count } = await supabase.from('telegram_raid_joins').select('id', { count: 'exact', head: true }).eq('chat_id', chatId).gte('joined_at', cutoff);
+  return (count || 0) >= 10;
+}
 
-function detectRaid(chatId: number): boolean {
+// ==================== FEATURE 5: ANTI-FLOOD (RATE LIMITING) ====================
+
+const floodTracker: Record<string, number[]> = {};
+
+function detectFlood(userId: number, chatId: number, maxMsgs: number, intervalSec: number): boolean {
+  const key = `${chatId}_${userId}`;
   const now = Date.now();
-  if (!joinTracker[chatId]) joinTracker[chatId] = [];
-  joinTracker[chatId].push(now);
-  joinTracker[chatId] = joinTracker[chatId].filter(t => now - t < 60000);
-  return joinTracker[chatId].length >= 10;
+  if (!floodTracker[key]) floodTracker[key] = [];
+  floodTracker[key].push(now);
+  floodTracker[key] = floodTracker[key].filter(t => now - t < intervalSec * 1000);
+  return floodTracker[key].length > maxMsgs;
+}
+
+// ==================== FEATURE 6: BLACKLIST WORDS ====================
+
+function containsBlacklistedWord(text: string, blacklist: string[]): string | null {
+  if (!blacklist || blacklist.length === 0) return null;
+  const lower = text.toLowerCase();
+  for (const word of blacklist) {
+    if (word && lower.includes(word.toLowerCase())) return word;
+  }
+  return null;
+}
+
+// ==================== FEATURE 7: FORWARD SPAM DETECTION ====================
+
+const forwardTracker: Record<string, number[]> = {};
+
+function detectForwardSpam(userId: number, chatId: number): boolean {
+  const key = `fwd_${chatId}_${userId}`;
+  const now = Date.now();
+  if (!forwardTracker[key]) forwardTracker[key] = [];
+  forwardTracker[key].push(now);
+  forwardTracker[key] = forwardTracker[key].filter(t => now - t < 30000);
+  return forwardTracker[key].length >= 4; // 4 forwards in 30 seconds
 }
 
 // ==================== ENTERTAINMENT DATA ====================
