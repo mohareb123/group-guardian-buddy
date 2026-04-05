@@ -605,9 +605,60 @@ async function handleCommand(supabase: any, update: any) {
         return;
       }
 
-      // Anti-spam: only affects normal members, not admins/owner/developer
+      // ===== ANTI-FLOOD: Rate limiting =====
+      if (group.anti_flood && !admin && !dev) {
+        const maxMsgs = group.flood_max_messages || 5;
+        const interval = group.flood_interval_seconds || 3;
+        if (detectFlood(userId, chatId, maxMsgs, interval)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          // Auto-mute for 5 minutes on flood
+          await tgCall('restrictChatMember', { 
+            chat_id: chatId, user_id: userId, 
+            permissions: { can_send_messages: false },
+            until_date: Math.floor(Date.now() / 1000) + 300
+          }).catch(() => {});
+          await sendMsg(chatId, `🚫 <b>${username}</b> تم كتمك 5 دقائق بسبب الفيضان (${maxMsgs}+ رسالة في ${interval} ثوانٍ)`);
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'auto_mute', 'فيضان رسائل');
+          return;
+        }
+      }
+
+      // ===== ANTI-FORWARD SPAM =====
+      if (group.anti_forward_spam && !admin && !dev && (msg.forward_from || msg.forward_from_chat || msg.forward_date)) {
+        if (detectForwardSpam(userId, chatId)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await tgCall('restrictChatMember', {
+            chat_id: chatId, user_id: userId,
+            permissions: { can_send_messages: false },
+            until_date: Math.floor(Date.now() / 1000) + 600
+          }).catch(() => {});
+          await sendMsg(chatId, `🚫 <b>${username}</b> تم كتمك 10 دقائق بسبب سبام التوجيه`);
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'auto_mute', 'سبام توجيه');
+          return;
+        }
+      }
+
+      // ===== BLACKLIST WORDS =====
+      if (group.blacklist_words?.length > 0 && !admin && !dev && text) {
+        const found = containsBlacklistedWord(text, group.blacklist_words);
+        if (found) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await sendMsg(chatId, `⚠️ <b>${username}</b> رسالتك تحتوي على كلمة محظورة!`);
+          await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: -3 });
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'blacklist', `كلمة: ${found}`);
+          return;
+        }
+      }
+
+      // Anti-spam: repeated messages + repeated chars
       if (group.anti_spam && !admin && !dev && text) {
-        // Simple spam detection: repeated messages
+        // Check repeated characters (like "aaaaaaaaaa")
+        if (text.length > 5 && /(.)\1{9,}/.test(text)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await sendMsg(chatId, `⚠️ <b>${username}</b> توقف عن السبام!`);
+          return;
+        }
+        // Check repeated messages from DB
         const { data: recentMsgs } = await supabase.from('telegram_messages')
           .select('text')
           .eq('chat_id', chatId)
@@ -618,7 +669,12 @@ async function handleCommand(supabase: any, update: any) {
           const allSame = recentMsgs.every((m: any) => m.text === text);
           if (allSame) {
             try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-            await sendMsg(chatId, `⚠️ <b>${username}</b> توقف عن السبام!`);
+            await tgCall('restrictChatMember', {
+              chat_id: chatId, user_id: userId,
+              permissions: { can_send_messages: false },
+              until_date: Math.floor(Date.now() / 1000) + 120
+            }).catch(() => {});
+            await sendMsg(chatId, `⚠️ <b>${username}</b> تم كتمك دقيقتين بسبب السبام!`);
             return;
           }
         }
