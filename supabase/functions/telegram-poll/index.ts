@@ -1373,6 +1373,7 @@ async function handleCallback(supabase: any, cq: any) {
     if (result === 'correct') {
       await tgCall('restrictChatMember', { chat_id: chatId, user_id: userId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } });
       await supabase.from('telegram_users').update({ captcha_verified: true }).eq('user_id', userId).eq('chat_id', chatId);
+      await supabase.from('telegram_captcha_pending').delete().eq('chat_id', chatId).eq('user_id', userId);
       await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ تم التحقق! مرحباً بك', show_alert: true });
       const { data: group } = await supabase.from('telegram_groups').select('welcome_message').eq('chat_id', chatId).single();
       await sendMsg(chatId, `${group?.welcome_message || 'مرحباً!'}\n\n✅ <b>${cq.from.first_name || 'عضو'}</b> اجتاز التحقق 🎉`);
