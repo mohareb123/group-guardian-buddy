@@ -520,14 +520,35 @@ async function handleCommand(supabase: any, update: any) {
       const name = member.first_name || member.username || 'عضو جديد';
       await ensureUser(supabase, member.id, chatId, member.username, member.first_name, member.last_name);
 
+      // Restrict new accounts (less than X days old)
+      if (group?.restrict_new_accounts && member.id) {
+        // Telegram user IDs are sequential - newer accounts have higher IDs
+        // We use a heuristic: if the account ID suggests it was created recently
+        // Better approach: check if they have no prior activity
+        const { data: existingUser } = await supabase.from('telegram_users').select('created_at').eq('user_id', member.id).limit(1).single();
+        if (!existingUser) {
+          // First time seeing this user anywhere - restrict them
+          await tgCall('restrictChatMember', { 
+            chat_id: chatId, user_id: member.id, 
+            permissions: { can_send_messages: true, can_send_media_messages: false, can_send_other_messages: false, can_add_web_page_previews: false },
+            until_date: Math.floor(Date.now() / 1000) + (group.new_account_days || 7) * 86400
+          });
+          await sendMsg(chatId, `🔒 <b>${name}</b> حساب جديد - تم تقييده مؤقتاً (نص فقط لمدة ${group.new_account_days || 7} أيام)`);
+        }
+      }
+
       if (group?.captcha_enabled) {
         const num1 = Math.floor(Math.random() * 10) + 1;
         const num2 = Math.floor(Math.random() * 10) + 1;
         const answer = num1 + num2;
+        // Shuffle answers randomly
+        const options = [answer - 1, answer, answer + 1].sort(() => Math.random() - 0.5);
         await tgCall('restrictChatMember', { chat_id: chatId, user_id: member.id, permissions: { can_send_messages: false } });
-        await sendMsg(chatId, `🔒 <b>تحقق أمني لـ ${name}</b>\n\nأجب على السؤال للمتابعة:\n❓ كم يساوي <b>${num1} + ${num2}</b>؟`, {
+        // Track captcha for timeout
+        await supabase.from('telegram_captcha_pending').upsert({ chat_id: chatId, user_id: member.id }, { onConflict: 'chat_id,user_id' });
+        await sendMsg(chatId, `🔒 <b>تحقق أمني لـ ${name}</b>\n\nأجب على السؤال خلال <b>دقيقتين</b> وإلا ستُطرد:\n❓ كم يساوي <b>${num1} + ${num2}</b>؟`, {
           inline_keyboard: [
-            [{ text: `${answer - 1}`, callback_data: `captcha_${member.id}_wrong` }, { text: `${answer}`, callback_data: `captcha_${member.id}_correct` }, { text: `${answer + 1}`, callback_data: `captcha_${member.id}_wrong` }],
+            options.map(o => ({ text: `${o}`, callback_data: `captcha_${member.id}_${o === answer ? 'correct' : 'wrong'}` })),
           ],
         });
       } else {
