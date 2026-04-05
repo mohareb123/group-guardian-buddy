@@ -505,9 +505,13 @@ async function handleCommand(supabase: any, update: any) {
     const groupTitle = group?.title || msg.chat.title || 'مجموعة';
 
     if (group?.raid_protection) {
-      if (detectRaid(chatId)) {
+      if (await detectRaid(supabase, chatId, member?.id || 0)) {
         await sendMsg(chatId, '🚨 <b>تنبيه غارة!</b>\n\nتم رصد انضمام جماعي مشبوه. يتم تفعيل الحماية التلقائية...');
         await notifyDeveloper(`🚨 <b>غارة محتملة!</b>\nالمجموعة: ${groupTitle}\nعدد الانضمامات: 10+ في دقيقة`);
+        // Auto-ban the newcomers in a raid
+        for (const member of msg.new_chat_members) {
+          try { await tgCall('banChatMember', { chat_id: chatId, user_id: member.id }); } catch {}
+        }
         return;
       }
     }
