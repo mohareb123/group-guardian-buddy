@@ -1410,6 +1410,27 @@ async function handleCallback(supabase: any, cq: any) {
   }
 }
 
+// ==================== CAPTCHA TIMEOUT CHECK ====================
+
+async function checkCaptchaTimeouts(supabase: any) {
+  const cutoff = new Date(Date.now() - 120000).toISOString(); // 2 minutes
+  const { data: expired } = await supabase.from('telegram_captcha_pending')
+    .select('chat_id, user_id')
+    .lte('created_at', cutoff);
+  
+  if (expired && expired.length > 0) {
+    for (const entry of expired) {
+      try {
+        // Kick (ban then unban)
+        await tgCall('banChatMember', { chat_id: entry.chat_id, user_id: entry.user_id });
+        await tgCall('unbanChatMember', { chat_id: entry.chat_id, user_id: entry.user_id });
+        await sendMsg(entry.chat_id, `🚫 تم طرد عضو لعدم حل الكابتشا خلال دقيقتين`);
+        await supabase.from('telegram_captcha_pending').delete().eq('chat_id', entry.chat_id).eq('user_id', entry.user_id);
+      } catch (e) { console.error('Captcha timeout kick error:', e); }
+    }
+  }
+}
+
 // ==================== SCHEDULED MESSAGES CHECK ====================
 
 async function checkScheduledMessages(supabase: any) {
