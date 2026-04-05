@@ -28,11 +28,15 @@ const commandSections = [
     icon: Lock,
     commands: [
       { cmd: "/lock /unlock", desc: "قفل links|media|stickers|files" },
-      { cmd: "/antispam on|off", desc: "مضاد السبام" },
-      { cmd: "/captcha on|off", desc: "كابتشا رياضية للأعضاء الجدد" },
+      { cmd: "/antispam on|off", desc: "مضاد السبام (كتم تلقائي)" },
+      { cmd: "/antiflood 5 3", desc: "مضاد الفيضان (5 رسائل/3 ثوانٍ)" },
+      { cmd: "/captcha on|off", desc: "كابتشا + طرد تلقائي بعد دقيقتين" },
       { cmd: "/toxicity on|off", desc: "فلتر المحتوى السام بالـ AI" },
+      { cmd: "/blacklist add|remove|clear", desc: "كلمات محظورة (حذف تلقائي)" },
+      { cmd: "/restrict_new 7|off", desc: "تقييد الحسابات الجديدة (نص فقط)" },
       { cmd: "/nightmode 23 6", desc: "وضع ليلي (حذف رسائل)" },
       { cmd: "/slowmode 30", desc: "وضع بطيء (ثواني)" },
+      { cmd: "/security", desc: "عرض حالة جميع أنظمة الحماية" },
     ],
   },
   {
