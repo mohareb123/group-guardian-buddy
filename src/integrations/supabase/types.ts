@@ -68,6 +68,27 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_captcha_pending: {
+        Row: {
+          chat_id: number
+          created_at: string
+          id: string
+          user_id: number
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          id?: string
+          user_id: number
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          id?: string
+          user_id?: number
+        }
+        Relationships: []
+      }
       telegram_challenge_completions: {
         Row: {
           challenge_id: string | null
@@ -257,23 +278,30 @@ export type Database = {
       }
       telegram_groups: {
         Row: {
+          anti_flood: boolean | null
+          anti_forward_spam: boolean | null
           anti_spam: boolean | null
           auto_faq_enabled: boolean | null
           auto_trust_enabled: boolean | null
+          blacklist_words: string[] | null
           captcha_enabled: boolean | null
           chat_id: number
           created_at: string
           daily_digest_enabled: boolean | null
           entertainment_enabled: boolean | null
+          flood_interval_seconds: number | null
+          flood_max_messages: number | null
           id: string
           lock_files: boolean | null
           lock_links: boolean | null
           lock_media: boolean | null
           lock_stickers: boolean | null
           max_warnings: number | null
+          new_account_days: number | null
           night_mode_end: number | null
           night_mode_start: number | null
           raid_protection: boolean | null
+          restrict_new_accounts: boolean | null
           slow_mode_seconds: number | null
           title: string | null
           toxicity_filter: boolean | null
@@ -281,23 +309,30 @@ export type Database = {
           welcome_message: string | null
         }
         Insert: {
+          anti_flood?: boolean | null
+          anti_forward_spam?: boolean | null
           anti_spam?: boolean | null
           auto_faq_enabled?: boolean | null
           auto_trust_enabled?: boolean | null
+          blacklist_words?: string[] | null
           captcha_enabled?: boolean | null
           chat_id: number
           created_at?: string
           daily_digest_enabled?: boolean | null
           entertainment_enabled?: boolean | null
+          flood_interval_seconds?: number | null
+          flood_max_messages?: number | null
           id?: string
           lock_files?: boolean | null
           lock_links?: boolean | null
           lock_media?: boolean | null
           lock_stickers?: boolean | null
           max_warnings?: number | null
+          new_account_days?: number | null
           night_mode_end?: number | null
           night_mode_start?: number | null
           raid_protection?: boolean | null
+          restrict_new_accounts?: boolean | null
           slow_mode_seconds?: number | null
           title?: string | null
           toxicity_filter?: boolean | null
@@ -305,23 +340,30 @@ export type Database = {
           welcome_message?: string | null
         }
         Update: {
+          anti_flood?: boolean | null
+          anti_forward_spam?: boolean | null
           anti_spam?: boolean | null
           auto_faq_enabled?: boolean | null
           auto_trust_enabled?: boolean | null
+          blacklist_words?: string[] | null
           captcha_enabled?: boolean | null
           chat_id?: number
           created_at?: string
           daily_digest_enabled?: boolean | null
           entertainment_enabled?: boolean | null
+          flood_interval_seconds?: number | null
+          flood_max_messages?: number | null
           id?: string
           lock_files?: boolean | null
           lock_links?: boolean | null
           lock_media?: boolean | null
           lock_stickers?: boolean | null
           max_warnings?: number | null
+          new_account_days?: number | null
           night_mode_end?: number | null
           night_mode_start?: number | null
           raid_protection?: boolean | null
+          restrict_new_accounts?: boolean | null
           slow_mode_seconds?: number | null
           title?: string | null
           toxicity_filter?: boolean | null
@@ -427,6 +469,27 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      telegram_raid_joins: {
+        Row: {
+          chat_id: number
+          id: string
+          joined_at: string
+          user_id: number
+        }
+        Insert: {
+          chat_id: number
+          id?: string
+          joined_at?: string
+          user_id: number
+        }
+        Update: {
+          chat_id?: number
+          id?: string
+          joined_at?: string
+          user_id?: number
+        }
+        Relationships: []
       }
       telegram_saved_messages: {
         Row: {
@@ -685,6 +748,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_old_raid_joins: { Args: never; Returns: undefined }
       increment_coins: {
         Args: { p_amount: number; p_chat_id: number; p_user_id: number }
         Returns: undefined

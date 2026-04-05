@@ -342,16 +342,54 @@ async function checkToxicity(text: string): Promise<{ toxic: boolean; reason: st
   } catch { return { toxic: false, reason: '' }; }
 }
 
-// ==================== FEATURE 4: RAID DETECTION ====================
+// ==================== FEATURE 4: RAID DETECTION (DB-BASED) ====================
 
-const joinTracker: Record<number, number[]> = {};
+async function detectRaid(supabase: any, chatId: number, userId: number): Promise<boolean> {
+  // Record this join
+  await supabase.from('telegram_raid_joins').insert({ chat_id: chatId, user_id: userId });
+  // Cleanup old joins
+  await supabase.rpc('cleanup_old_raid_joins').catch(() => {});
+  // Count recent joins in last 60 seconds
+  const cutoff = new Date(Date.now() - 60000).toISOString();
+  const { count } = await supabase.from('telegram_raid_joins').select('id', { count: 'exact', head: true }).eq('chat_id', chatId).gte('joined_at', cutoff);
+  return (count || 0) >= 10;
+}
 
-function detectRaid(chatId: number): boolean {
+// ==================== FEATURE 5: ANTI-FLOOD (RATE LIMITING) ====================
+
+const floodTracker: Record<string, number[]> = {};
+
+function detectFlood(userId: number, chatId: number, maxMsgs: number, intervalSec: number): boolean {
+  const key = `${chatId}_${userId}`;
   const now = Date.now();
-  if (!joinTracker[chatId]) joinTracker[chatId] = [];
-  joinTracker[chatId].push(now);
-  joinTracker[chatId] = joinTracker[chatId].filter(t => now - t < 60000);
-  return joinTracker[chatId].length >= 10;
+  if (!floodTracker[key]) floodTracker[key] = [];
+  floodTracker[key].push(now);
+  floodTracker[key] = floodTracker[key].filter(t => now - t < intervalSec * 1000);
+  return floodTracker[key].length > maxMsgs;
+}
+
+// ==================== FEATURE 6: BLACKLIST WORDS ====================
+
+function containsBlacklistedWord(text: string, blacklist: string[]): string | null {
+  if (!blacklist || blacklist.length === 0) return null;
+  const lower = text.toLowerCase();
+  for (const word of blacklist) {
+    if (word && lower.includes(word.toLowerCase())) return word;
+  }
+  return null;
+}
+
+// ==================== FEATURE 7: FORWARD SPAM DETECTION ====================
+
+const forwardTracker: Record<string, number[]> = {};
+
+function detectForwardSpam(userId: number, chatId: number): boolean {
+  const key = `fwd_${chatId}_${userId}`;
+  const now = Date.now();
+  if (!forwardTracker[key]) forwardTracker[key] = [];
+  forwardTracker[key].push(now);
+  forwardTracker[key] = forwardTracker[key].filter(t => now - t < 30000);
+  return forwardTracker[key].length >= 4; // 4 forwards in 30 seconds
 }
 
 // ==================== ENTERTAINMENT DATA ====================
@@ -467,9 +505,13 @@ async function handleCommand(supabase: any, update: any) {
     const groupTitle = group?.title || msg.chat.title || 'مجموعة';
 
     if (group?.raid_protection) {
-      if (detectRaid(chatId)) {
+      if (await detectRaid(supabase, chatId, member?.id || 0)) {
         await sendMsg(chatId, '🚨 <b>تنبيه غارة!</b>\n\nتم رصد انضمام جماعي مشبوه. يتم تفعيل الحماية التلقائية...');
         await notifyDeveloper(`🚨 <b>غارة محتملة!</b>\nالمجموعة: ${groupTitle}\nعدد الانضمامات: 10+ في دقيقة`);
+        // Auto-ban the newcomers in a raid
+        for (const member of msg.new_chat_members) {
+          try { await tgCall('banChatMember', { chat_id: chatId, user_id: member.id }); } catch {}
+        }
         return;
       }
     }
@@ -478,14 +520,35 @@ async function handleCommand(supabase: any, update: any) {
       const name = member.first_name || member.username || 'عضو جديد';
       await ensureUser(supabase, member.id, chatId, member.username, member.first_name, member.last_name);
 
+      // Restrict new accounts (less than X days old)
+      if (group?.restrict_new_accounts && member.id) {
+        // Telegram user IDs are sequential - newer accounts have higher IDs
+        // We use a heuristic: if the account ID suggests it was created recently
+        // Better approach: check if they have no prior activity
+        const { data: existingUser } = await supabase.from('telegram_users').select('created_at').eq('user_id', member.id).limit(1).single();
+        if (!existingUser) {
+          // First time seeing this user anywhere - restrict them
+          await tgCall('restrictChatMember', { 
+            chat_id: chatId, user_id: member.id, 
+            permissions: { can_send_messages: true, can_send_media_messages: false, can_send_other_messages: false, can_add_web_page_previews: false },
+            until_date: Math.floor(Date.now() / 1000) + (group.new_account_days || 7) * 86400
+          });
+          await sendMsg(chatId, `🔒 <b>${name}</b> حساب جديد - تم تقييده مؤقتاً (نص فقط لمدة ${group.new_account_days || 7} أيام)`);
+        }
+      }
+
       if (group?.captcha_enabled) {
         const num1 = Math.floor(Math.random() * 10) + 1;
         const num2 = Math.floor(Math.random() * 10) + 1;
         const answer = num1 + num2;
+        // Shuffle answers randomly
+        const options = [answer - 1, answer, answer + 1].sort(() => Math.random() - 0.5);
         await tgCall('restrictChatMember', { chat_id: chatId, user_id: member.id, permissions: { can_send_messages: false } });
-        await sendMsg(chatId, `🔒 <b>تحقق أمني لـ ${name}</b>\n\nأجب على السؤال للمتابعة:\n❓ كم يساوي <b>${num1} + ${num2}</b>؟`, {
+        // Track captcha for timeout
+        await supabase.from('telegram_captcha_pending').upsert({ chat_id: chatId, user_id: member.id }, { onConflict: 'chat_id,user_id' });
+        await sendMsg(chatId, `🔒 <b>تحقق أمني لـ ${name}</b>\n\nأجب على السؤال خلال <b>دقيقتين</b> وإلا ستُطرد:\n❓ كم يساوي <b>${num1} + ${num2}</b>؟`, {
           inline_keyboard: [
-            [{ text: `${answer - 1}`, callback_data: `captcha_${member.id}_wrong` }, { text: `${answer}`, callback_data: `captcha_${member.id}_correct` }, { text: `${answer + 1}`, callback_data: `captcha_${member.id}_wrong` }],
+            options.map(o => ({ text: `${o}`, callback_data: `captcha_${member.id}_${o === answer ? 'correct' : 'wrong'}` })),
           ],
         });
       } else {
@@ -542,9 +605,60 @@ async function handleCommand(supabase: any, update: any) {
         return;
       }
 
-      // Anti-spam: only affects normal members, not admins/owner/developer
+      // ===== ANTI-FLOOD: Rate limiting =====
+      if (group.anti_flood && !admin && !dev) {
+        const maxMsgs = group.flood_max_messages || 5;
+        const interval = group.flood_interval_seconds || 3;
+        if (detectFlood(userId, chatId, maxMsgs, interval)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          // Auto-mute for 5 minutes on flood
+          await tgCall('restrictChatMember', { 
+            chat_id: chatId, user_id: userId, 
+            permissions: { can_send_messages: false },
+            until_date: Math.floor(Date.now() / 1000) + 300
+          }).catch(() => {});
+          await sendMsg(chatId, `🚫 <b>${username}</b> تم كتمك 5 دقائق بسبب الفيضان (${maxMsgs}+ رسالة في ${interval} ثوانٍ)`);
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'auto_mute', 'فيضان رسائل');
+          return;
+        }
+      }
+
+      // ===== ANTI-FORWARD SPAM =====
+      if (group.anti_forward_spam && !admin && !dev && (msg.forward_from || msg.forward_from_chat || msg.forward_date)) {
+        if (detectForwardSpam(userId, chatId)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await tgCall('restrictChatMember', {
+            chat_id: chatId, user_id: userId,
+            permissions: { can_send_messages: false },
+            until_date: Math.floor(Date.now() / 1000) + 600
+          }).catch(() => {});
+          await sendMsg(chatId, `🚫 <b>${username}</b> تم كتمك 10 دقائق بسبب سبام التوجيه`);
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'auto_mute', 'سبام توجيه');
+          return;
+        }
+      }
+
+      // ===== BLACKLIST WORDS =====
+      if (group.blacklist_words?.length > 0 && !admin && !dev && text) {
+        const found = containsBlacklistedWord(text, group.blacklist_words);
+        if (found) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await sendMsg(chatId, `⚠️ <b>${username}</b> رسالتك تحتوي على كلمة محظورة!`);
+          await supabase.rpc('update_reputation', { p_user_id: userId, p_chat_id: chatId, p_amount: -3 });
+          await logAction(supabase, chatId, 0, 'النظام', userId, username, 'blacklist', `كلمة: ${found}`);
+          return;
+        }
+      }
+
+      // Anti-spam: repeated messages + repeated chars
       if (group.anti_spam && !admin && !dev && text) {
-        // Simple spam detection: repeated messages
+        // Check repeated characters (like "aaaaaaaaaa")
+        if (text.length > 5 && /(.)\1{9,}/.test(text)) {
+          try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
+          await sendMsg(chatId, `⚠️ <b>${username}</b> توقف عن السبام!`);
+          return;
+        }
+        // Check repeated messages from DB
         const { data: recentMsgs } = await supabase.from('telegram_messages')
           .select('text')
           .eq('chat_id', chatId)
@@ -555,7 +669,12 @@ async function handleCommand(supabase: any, update: any) {
           const allSame = recentMsgs.every((m: any) => m.text === text);
           if (allSame) {
             try { await tgCall('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch {}
-            await sendMsg(chatId, `⚠️ <b>${username}</b> توقف عن السبام!`);
+            await tgCall('restrictChatMember', {
+              chat_id: chatId, user_id: userId,
+              permissions: { can_send_messages: false },
+              until_date: Math.floor(Date.now() / 1000) + 120
+            }).catch(() => {});
+            await sendMsg(chatId, `⚠️ <b>${username}</b> تم كتمك دقيقتين بسبب السبام!`);
             return;
           }
         }
@@ -742,7 +861,7 @@ async function handleCommand(supabase: any, update: any) {
       break;
 
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /nightmode /captcha /toxicity /slowmode\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
+      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
       break;
 
     case '/dev': case '/developer': case '/owner':
@@ -996,6 +1115,83 @@ async function handleCommand(supabase: any, update: any) {
       const on = args[0] === 'on';
       await supabase.from('telegram_groups').update({ anti_spam: on }).eq('chat_id', chatId);
       await sendMsg(chatId, on ? '🛡 تم تفعيل مضاد السبام' : '🛡 تم إيقاف مضاد السبام');
+      break;
+    }
+
+    case '/antiflood': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (args[0] === 'off') {
+        await supabase.from('telegram_groups').update({ anti_flood: false }).eq('chat_id', chatId);
+        await sendMsg(chatId, '🔓 تم إيقاف مضاد الفيضان');
+      } else {
+        const maxMsgs = parseInt(args[0]) || 5;
+        const interval = parseInt(args[1]) || 3;
+        await supabase.from('telegram_groups').update({ anti_flood: true, flood_max_messages: maxMsgs, flood_interval_seconds: interval }).eq('chat_id', chatId);
+        await sendMsg(chatId, `🛡️ مضاد الفيضان: <b>${maxMsgs}</b> رسائل / <b>${interval}</b> ثوانٍ\nالعقوبة: كتم 5 دقائق`);
+      }
+      break;
+    }
+
+    case '/blacklist': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (!args[0]) {
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = g?.blacklist_words || [];
+        await sendMsg(chatId, words.length > 0 
+          ? `🚫 <b>الكلمات المحظورة (${words.length}):</b>\n${words.map((w: string, i: number) => `${i+1}. ${w}`).join('\n')}\n\n➕ /blacklist add كلمة\n➖ /blacklist remove كلمة\n🗑 /blacklist clear`
+          : '🚫 لا توجد كلمات محظورة\n\n➕ /blacklist add كلمة');
+        break;
+      }
+      if (args[0] === 'add' && args[1]) {
+        const word = args.slice(1).join(' ');
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = [...(g?.blacklist_words || []), word];
+        await supabase.from('telegram_groups').update({ blacklist_words: words }).eq('chat_id', chatId);
+        await sendMsg(chatId, `✅ تم إضافة "<b>${word}</b>" للقائمة السوداء`);
+      } else if (args[0] === 'remove' && args[1]) {
+        const word = args.slice(1).join(' ');
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = (g?.blacklist_words || []).filter((w: string) => w.toLowerCase() !== word.toLowerCase());
+        await supabase.from('telegram_groups').update({ blacklist_words: words }).eq('chat_id', chatId);
+        await sendMsg(chatId, `✅ تم إزالة "<b>${word}</b>" من القائمة السوداء`);
+      } else if (args[0] === 'clear') {
+        await supabase.from('telegram_groups').update({ blacklist_words: [] }).eq('chat_id', chatId);
+        await sendMsg(chatId, '✅ تم مسح القائمة السوداء');
+      }
+      break;
+    }
+
+    case '/restrict_new': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (args[0] === 'off') {
+        await supabase.from('telegram_groups').update({ restrict_new_accounts: false }).eq('chat_id', chatId);
+        await sendMsg(chatId, '🔓 تم إيقاف تقييد الحسابات الجديدة');
+      } else {
+        const days = parseInt(args[0]) || 7;
+        await supabase.from('telegram_groups').update({ restrict_new_accounts: true, new_account_days: days }).eq('chat_id', chatId);
+        await sendMsg(chatId, `🔒 تقييد الحسابات الجديدة: <b>${days}</b> أيام (نص فقط)`);
+      }
+      break;
+    }
+
+    case '/security': {
+      if (msg.chat.type === 'private') break;
+      const { data: g } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
+      if (!g) break;
+      await sendMsg(chatId, `🛡️ <b>حالة الحماية:</b>\n\n` +
+        `${g.anti_spam ? '✅' : '❌'} مضاد السبام\n` +
+        `${g.anti_flood ? '✅' : '❌'} مضاد الفيضان ${g.anti_flood ? `(${g.flood_max_messages}/${g.flood_interval_seconds}s)` : ''}\n` +
+        `${g.anti_forward_spam ? '✅' : '❌'} مضاد سبام التوجيه\n` +
+        `${g.captcha_enabled ? '✅' : '❌'} كابتشا (طرد تلقائي بعد دقيقتين)\n` +
+        `${g.toxicity_filter ? '✅' : '❌'} فلتر المحتوى السام\n` +
+        `${g.raid_protection ? '✅' : '❌'} حماية من الغارات\n` +
+        `${g.restrict_new_accounts ? '✅' : '❌'} تقييد حسابات جديدة ${g.restrict_new_accounts ? `(${g.new_account_days} أيام)` : ''}\n` +
+        `${g.night_mode_start !== null ? '✅' : '❌'} الوضع الليلي ${g.night_mode_start !== null ? `(${g.night_mode_start}-${g.night_mode_end})` : ''}\n` +
+        `${(g.blacklist_words || []).length > 0 ? '✅' : '❌'} قائمة سوداء (${(g.blacklist_words || []).length} كلمة)\n` +
+        `${g.lock_links ? '✅' : '❌'} قفل الروابط\n` +
+        `${g.lock_media ? '✅' : '❌'} قفل الوسائط\n` +
+        `${g.lock_stickers ? '✅' : '❌'} قفل الملصقات\n` +
+        `${g.lock_files ? '✅' : '❌'} قفل الملفات`);
       break;
     }
 
@@ -1254,6 +1450,7 @@ async function handleCallback(supabase: any, cq: any) {
     if (result === 'correct') {
       await tgCall('restrictChatMember', { chat_id: chatId, user_id: userId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } });
       await supabase.from('telegram_users').update({ captcha_verified: true }).eq('user_id', userId).eq('chat_id', chatId);
+      await supabase.from('telegram_captcha_pending').delete().eq('chat_id', chatId).eq('user_id', userId);
       await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ تم التحقق! مرحباً بك', show_alert: true });
       const { data: group } = await supabase.from('telegram_groups').select('welcome_message').eq('chat_id', chatId).single();
       await sendMsg(chatId, `${group?.welcome_message || 'مرحباً!'}\n\n✅ <b>${cq.from.first_name || 'عضو'}</b> اجتاز التحقق 🎉`);
@@ -1290,6 +1487,27 @@ async function handleCallback(supabase: any, cq: any) {
   }
 }
 
+// ==================== CAPTCHA TIMEOUT CHECK ====================
+
+async function checkCaptchaTimeouts(supabase: any) {
+  const cutoff = new Date(Date.now() - 120000).toISOString(); // 2 minutes
+  const { data: expired } = await supabase.from('telegram_captcha_pending')
+    .select('chat_id, user_id')
+    .lte('created_at', cutoff);
+  
+  if (expired && expired.length > 0) {
+    for (const entry of expired) {
+      try {
+        // Kick (ban then unban)
+        await tgCall('banChatMember', { chat_id: entry.chat_id, user_id: entry.user_id });
+        await tgCall('unbanChatMember', { chat_id: entry.chat_id, user_id: entry.user_id });
+        await sendMsg(entry.chat_id, `🚫 تم طرد عضو لعدم حل الكابتشا خلال دقيقتين`);
+        await supabase.from('telegram_captcha_pending').delete().eq('chat_id', entry.chat_id).eq('user_id', entry.user_id);
+      } catch (e) { console.error('Captcha timeout kick error:', e); }
+    }
+  }
+}
+
 // ==================== SCHEDULED MESSAGES CHECK ====================
 
 async function checkScheduledMessages(supabase: any) {
@@ -1317,6 +1535,7 @@ Deno.serve(async () => {
     let totalProcessed = 0;
 
     await checkScheduledMessages(supabase);
+    await checkCaptchaTimeouts(supabase);
 
     const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset').eq('id', 1).single();
     if (stateErr) return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
