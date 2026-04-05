@@ -1118,6 +1118,83 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
+    case '/antiflood': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (args[0] === 'off') {
+        await supabase.from('telegram_groups').update({ anti_flood: false }).eq('chat_id', chatId);
+        await sendMsg(chatId, '🔓 تم إيقاف مضاد الفيضان');
+      } else {
+        const maxMsgs = parseInt(args[0]) || 5;
+        const interval = parseInt(args[1]) || 3;
+        await supabase.from('telegram_groups').update({ anti_flood: true, flood_max_messages: maxMsgs, flood_interval_seconds: interval }).eq('chat_id', chatId);
+        await sendMsg(chatId, `🛡️ مضاد الفيضان: <b>${maxMsgs}</b> رسائل / <b>${interval}</b> ثوانٍ\nالعقوبة: كتم 5 دقائق`);
+      }
+      break;
+    }
+
+    case '/blacklist': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (!args[0]) {
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = g?.blacklist_words || [];
+        await sendMsg(chatId, words.length > 0 
+          ? `🚫 <b>الكلمات المحظورة (${words.length}):</b>\n${words.map((w: string, i: number) => `${i+1}. ${w}`).join('\n')}\n\n➕ /blacklist add كلمة\n➖ /blacklist remove كلمة\n🗑 /blacklist clear`
+          : '🚫 لا توجد كلمات محظورة\n\n➕ /blacklist add كلمة');
+        break;
+      }
+      if (args[0] === 'add' && args[1]) {
+        const word = args.slice(1).join(' ');
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = [...(g?.blacklist_words || []), word];
+        await supabase.from('telegram_groups').update({ blacklist_words: words }).eq('chat_id', chatId);
+        await sendMsg(chatId, `✅ تم إضافة "<b>${word}</b>" للقائمة السوداء`);
+      } else if (args[0] === 'remove' && args[1]) {
+        const word = args.slice(1).join(' ');
+        const { data: g } = await supabase.from('telegram_groups').select('blacklist_words').eq('chat_id', chatId).single();
+        const words = (g?.blacklist_words || []).filter((w: string) => w.toLowerCase() !== word.toLowerCase());
+        await supabase.from('telegram_groups').update({ blacklist_words: words }).eq('chat_id', chatId);
+        await sendMsg(chatId, `✅ تم إزالة "<b>${word}</b>" من القائمة السوداء`);
+      } else if (args[0] === 'clear') {
+        await supabase.from('telegram_groups').update({ blacklist_words: [] }).eq('chat_id', chatId);
+        await sendMsg(chatId, '✅ تم مسح القائمة السوداء');
+      }
+      break;
+    }
+
+    case '/restrict_new': {
+      if (!(await isAdmin(chatId, userId)) && !isDeveloper(userId)) { await sendMsg(chatId, '❌ للمشرفين فقط'); break; }
+      if (args[0] === 'off') {
+        await supabase.from('telegram_groups').update({ restrict_new_accounts: false }).eq('chat_id', chatId);
+        await sendMsg(chatId, '🔓 تم إيقاف تقييد الحسابات الجديدة');
+      } else {
+        const days = parseInt(args[0]) || 7;
+        await supabase.from('telegram_groups').update({ restrict_new_accounts: true, new_account_days: days }).eq('chat_id', chatId);
+        await sendMsg(chatId, `🔒 تقييد الحسابات الجديدة: <b>${days}</b> أيام (نص فقط)`);
+      }
+      break;
+    }
+
+    case '/security': {
+      if (msg.chat.type === 'private') break;
+      const { data: g } = await supabase.from('telegram_groups').select('*').eq('chat_id', chatId).single();
+      if (!g) break;
+      await sendMsg(chatId, `🛡️ <b>حالة الحماية:</b>\n\n` +
+        `${g.anti_spam ? '✅' : '❌'} مضاد السبام\n` +
+        `${g.anti_flood ? '✅' : '❌'} مضاد الفيضان ${g.anti_flood ? `(${g.flood_max_messages}/${g.flood_interval_seconds}s)` : ''}\n` +
+        `${g.anti_forward_spam ? '✅' : '❌'} مضاد سبام التوجيه\n` +
+        `${g.captcha_enabled ? '✅' : '❌'} كابتشا (طرد تلقائي بعد دقيقتين)\n` +
+        `${g.toxicity_filter ? '✅' : '❌'} فلتر المحتوى السام\n` +
+        `${g.raid_protection ? '✅' : '❌'} حماية من الغارات\n` +
+        `${g.restrict_new_accounts ? '✅' : '❌'} تقييد حسابات جديدة ${g.restrict_new_accounts ? `(${g.new_account_days} أيام)` : ''}\n` +
+        `${g.night_mode_start !== null ? '✅' : '❌'} الوضع الليلي ${g.night_mode_start !== null ? `(${g.night_mode_start}-${g.night_mode_end})` : ''}\n` +
+        `${(g.blacklist_words || []).length > 0 ? '✅' : '❌'} قائمة سوداء (${(g.blacklist_words || []).length} كلمة)\n` +
+        `${g.lock_links ? '✅' : '❌'} قفل الروابط\n` +
+        `${g.lock_media ? '✅' : '❌'} قفل الوسائط\n` +
+        `${g.lock_stickers ? '✅' : '❌'} قفل الملصقات\n` +
+        `${g.lock_files ? '✅' : '❌'} قفل الملفات`);
+      break;
+    }
+
     // ==================== CHALLENGE ====================
     case '/challenge': {
       const today = new Date().toISOString().split('T')[0];
