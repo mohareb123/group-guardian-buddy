@@ -1458,6 +1458,7 @@ Deno.serve(async () => {
     let totalProcessed = 0;
 
     await checkScheduledMessages(supabase);
+    await checkCaptchaTimeouts(supabase);
 
     const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset').eq('id', 1).single();
     if (stateErr) return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
