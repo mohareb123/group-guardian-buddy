@@ -396,24 +396,43 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
     } catch (e) { console.error('Photo error:', e); }
   }
 
-  const systemPrompt = `أنت فادي، مساعد ذكي لمجموعات تيليجرام. كن مهنياً ومفيداً وجاداً. تجنب المزاح إلا إذا طُلب منك ذلك صراحةً. أجب بدقة واختصار.
-المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
-المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء: ${(groupMembers || []).length}
-${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${replyMsg.text || '(وسائط)'}"` : ''}
+  const systemPrompt = `أنت "فادي"، وكيل ذكاء اصطناعي متقدم لمجموعة تيليجرام. هويتك واحدة وقدراتك متعددة.
+مهنتك: تفهم السياق بعمق (نص + صور)، تحلّل النية، تتخذ قرارات ذكية، وتنفّذ المهام الإدارية.
 
-قواعد مهمة:
-- كن جاداً ومختصراً (2-3 أسطر).
-- لا تمزح إلا إذا طُلب.
-- إذا طلب المستخدم إجراء إداري وكان مشرفاً أو المطور، أضف: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
-- يمكنك تنفيذ أوامر مثل: حظر، طرد، كتم، إلغاء كتم، تحذير، ترقية، تخفيض، تثبيت رسالة.
-- إذا طلب المستخدم إجراءً إدارياً بلغة طبيعية (مثل "احظر هذا" أو "اطرده") وكان مشرفاً/المطور، نفذ الأمر.
-- لا تُنشئ JSON إلا عند طلب إداري.`;
+المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
+المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء مسجّلون: ${(groupMembers || []).length}
+${replyMsg ? `يردّ على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${(replyMsg.text || '(وسائط)').slice(0, 200)}"` : ''}
+
+قواعد الرد:
+- نبرتك جادة، ودودة، مهنية، مختصرة (2-4 أسطر) — بدون مزاح إلا لو طُلب.
+- لا تكشف رسائل خطأ تقنية. لو فشل شيء، اشرح بشرياً واقترح بديل.
+
+لو في صورة:
+- لا تكتفِ بالوصف السطحي. حلّل بعمق:
+  • السياق العام (إيه اللي بيحصل ولماذا؟)
+  • العناصر (أشخاص، أشياء، نصوص، مشاعر، بيئة)
+  • نوع الصورة (ميم، إعلان، لقطة شاشة، صورة شخصية، تصميم، خطأ برمجي...)
+  • لو فيها نص: استخرجه وحلّله
+  • لو غامضة: اطلب توضيح بذكاء
+- جاوب على سؤال المستخدم بدقة بناءً على الصورة.
+
+أوامر إدارية بلغة طبيعية (احظر/اطرد/اكتم/حذّر/رقّي):
+- لو المستخدم مشرف أو المطور وطلب إجراء على شخص (بالرد عليه أو بذكر ID)، أضف في نهاية ردك بالضبط:
+  [ACTION:{"type":"ban|kick|mute|unmute|warn|promote|demote","target_user_id":<ID>}]
+- لا تُنشئ JSON إلا للإجراءات الفعلية.`;
 
   try {
-    const userPrompt = text || (imageUrl ? 'صورة مرسلة، صفها بإيجاز' : '');
+    const userPrompt = text || (imageUrl ? 'حلّل هذه الصورة بعمق وأخبرني ما الذي تراه ولماذا.' : '');
     if (!userPrompt && !imageUrl) return;
 
-    const reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    let reply: string;
+    try {
+      reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    } catch (e) {
+      // Fallback to a different model on persistent failure
+      try { reply = await callAI(userPrompt, systemPrompt, imageUrl, 'google/gemini-2.5-flash-lite'); }
+      catch (e2) { await sendMsg(chatId, humanError('الرد الذكي', e2), undefined, messageId); return; }
+    }
     if (!reply) return;
 
     let cleanReply = reply;
@@ -438,7 +457,10 @@ ${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:
       } catch (e) { console.error('AI action error:', e); }
     }
     if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
-  } catch (e) { console.error('AI error:', e); }
+  } catch (e) {
+    console.error('AI error:', e);
+    await sendMsg(chatId, humanError('الرد الذكي', e), undefined, messageId);
+  }
 }
 
 // ==================== FEATURE 3: TOXICITY FILTER ====================
