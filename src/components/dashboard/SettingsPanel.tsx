@@ -88,6 +88,34 @@ const commandSections = [
     ],
   },
   {
+    title: "💻 تشغيل الأكواد",
+    icon: Brain,
+    commands: [
+      { cmd: "/run python <code>", desc: "تشغيل بايثون فعلياً (Piston)" },
+      { cmd: "/run js <code>", desc: "تشغيل JavaScript / Node" },
+      { cmd: "/run typescript", desc: "تشغيل TypeScript" },
+      { cmd: "/run bash", desc: "تشغيل أوامر Bash" },
+    ],
+  },
+  {
+    title: "📥 تحميل الفيديوهات",
+    icon: Megaphone,
+    commands: [
+      { cmd: "/download <url>", desc: "تنزيل فيديو من TikTok/YT/IG" },
+    ],
+  },
+  {
+    title: "🛠️ أوامر المطور",
+    icon: Lock,
+    commands: [
+      { cmd: "/send <id> <msg>", desc: "إرسال لمستخدم محدد" },
+      { cmd: "/sendmulti 1,2,3 <msg>", desc: "إرسال لعدة مستخدمين" },
+      { cmd: "/broadcast <msg>", desc: "بث لكل المجموعات" },
+      { cmd: "/togglefeature <name> on|off", desc: "تفعيل/تعطيل ميزة حماية" },
+      { cmd: "/retry", desc: "إعادة الرسائل المجدولة الفاشلة" },
+    ],
+  },
+  {
     title: "🎮 الترفيه",
     icon: Gamepad2,
     commands: [
