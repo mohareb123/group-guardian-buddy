@@ -992,12 +992,108 @@ async function handleCommand(supabase: any, update: any) {
       break;
 
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
+      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n💻 <b>تشغيل أكواد:</b>\n/run python &lt;كود&gt; — وأيضاً js / typescript / bash\n\n📥 <b>تحميل فيديو:</b>\n/download &lt;رابط&gt; (TikTok / YouTube / Instagram)\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev\n\n🛠️ <b>للمطور فقط:</b> /send /sendmulti /broadcast /togglefeature /retry`);
       break;
 
     case '/dev': case '/developer': case '/owner':
       await sendMsg(chatId, `👨‍💻 <b>المطور:</b>`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       break;
+
+    // ==================== CODE EXECUTION ====================
+    case '/run': case '/exec': case '/code': {
+      const lang = (args[0] || '').trim();
+      let code = args.slice(1).join(' ').trim();
+      if (!code && replyMsg?.text) code = replyMsg.text;
+      if (!lang || !code) { await sendMsg(chatId, '💻 الاستخدام:\n<code>/run python\nprint("Hello")</code>\n\nأو رد على رسالة فيها كود:\n<code>/run python</code>'); break; }
+      await sendMsg(chatId, `⚙️ بشغّل الكود (${escapeHtml(lang)})...`);
+      const result = await executeCode(lang, code);
+      await sendMsg(chatId, result, undefined, msg.message_id);
+      break;
+    }
+
+    // ==================== VIDEO DOWNLOAD ====================
+    case '/download': case '/dl': case '/تنزيل': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📥 ابعت رابط الفيديو:\n<code>/download https://...</code>\n\nمدعوم: TikTok / YouTube / Instagram'); break; }
+      await sendMsg(chatId, '⏳ جاري استخراج الفيديو، لحظة من فضلك...');
+      try {
+        const res = await downloadVideo(url);
+        if (!res.ok || !res.videoUrl) { await sendMsg(chatId, res.message); break; }
+        try {
+          await tgCall('sendVideo', { chat_id: chatId, video: res.videoUrl, caption: '✅ تفضّل الفيديو', reply_to_message_id: msg.message_id });
+        } catch {
+          await sendMsg(chatId, `✅ تم الاستخراج. الرابط المباشر:\n${escapeHtml(res.videoUrl)}`, undefined, msg.message_id);
+        }
+      } catch (e) {
+        await sendMsg(chatId, humanError('تحميل الفيديو', e), undefined, msg.message_id);
+      }
+      break;
+    }
+
+    // ==================== DEVELOPER-ONLY ADMIN COMMANDS ====================
+    case '/send': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const target = parseInt(args[0]);
+      const message = args.slice(1).join(' ');
+      if (!target || !message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/send &lt;user_id&gt; &lt;الرسالة&gt;</code>'); break; }
+      try {
+        await tgCall('sendMessage', { chat_id: target, text: `📨 <b>رسالة من المطور:</b>\n\n${message}`, parse_mode: 'HTML' });
+        await sendMsg(chatId, `✅ تم الإرسال إلى <code>${target}</code>`);
+      } catch (e) { await sendMsg(chatId, humanError('الإرسال', e)); }
+      break;
+    }
+
+    case '/sendmulti': case '/send_multi': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const idsRaw = args[0] || '';
+      const message = args.slice(1).join(' ');
+      const ids = idsRaw.split(/[,،\s]+/).map(s => parseInt(s)).filter(n => !isNaN(n));
+      if (ids.length === 0 || !message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/sendmulti 111,222,333 الرسالة</code>'); break; }
+      let sent = 0, failed = 0;
+      for (const id of ids) {
+        try { await tgCall('sendMessage', { chat_id: id, text: `📨 <b>رسالة من المطور:</b>\n\n${message}`, parse_mode: 'HTML' }); sent++; }
+        catch { failed++; }
+      }
+      await sendMsg(chatId, `📊 النتيجة: ✅ ${sent} نجحت | ❌ ${failed} فشلت`);
+      break;
+    }
+
+    case '/broadcast': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const message = args.join(' ');
+      if (!message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/broadcast الرسالة</code>'); break; }
+      const { data: groups } = await supabase.from('telegram_groups').select('chat_id');
+      let sent = 0, failed = 0;
+      for (const g of (groups || [])) {
+        try { await tgCall('sendMessage', { chat_id: g.chat_id, text: `📢 <b>إشعار من المطور:</b>\n\n${message}`, parse_mode: 'HTML' }); sent++; }
+        catch { failed++; }
+      }
+      await sendMsg(chatId, `📊 البث: ✅ ${sent} مجموعة | ❌ ${failed} فشلت`);
+      break;
+    }
+
+    case '/togglefeature': case '/toggle_feature': case '/toggle': {
+      if (!isDeveloper(userId) && !(await isAdmin(chatId, userId))) { await sendMsg(chatId, '🔒 للمشرفين والمطور فقط.'); break; }
+      const feature = args[0];
+      const value = (args[1] || '').toLowerCase();
+      const allowed = ['anti_spam', 'anti_flood', 'anti_forward_spam', 'captcha_enabled', 'toxicity_filter', 'raid_protection', 'auto_faq_enabled', 'lock_links', 'lock_media', 'lock_stickers', 'lock_files', 'restrict_new_accounts'];
+      if (!feature || !allowed.includes(feature)) { await sendMsg(chatId, `🛠️ الاستخدام:\n<code>/toggle &lt;feature&gt; on|off</code>\n\nالميزات:\n${allowed.map(f => `• <code>${f}</code>`).join('\n')}`); break; }
+      const newVal = value === 'on' || value === 'true' || value === '1';
+      await supabase.from('telegram_groups').update({ [feature]: newVal }).eq('chat_id', chatId);
+      await sendMsg(chatId, `${newVal ? '✅' : '🔕'} <b>${feature}</b> = ${newVal ? 'مفعّل' : 'موقوف'}`);
+      break;
+    }
+
+    case '/retry': case '/retry_failed': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const { data: failedScheduled } = await supabase.from('telegram_scheduled_messages').select('*').eq('sent', false).lte('scheduled_at', new Date().toISOString()).limit(50);
+      let retried = 0;
+      for (const m of (failedScheduled || [])) {
+        try { await sendMsg(m.chat_id, `⏰ <b>رسالة مجدولة:</b>\n\n${m.message}`); await supabase.from('telegram_scheduled_messages').update({ sent: true }).eq('id', m.id); retried++; } catch {}
+      }
+      await sendMsg(chatId, `🔁 تمت إعادة محاولة ${retried} رسالة.`);
+      break;
+    }
 
     // ==================== SEARCH COMMANDS ====================
     case '/searchbook': case '/كتاب': {
