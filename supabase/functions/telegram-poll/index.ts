@@ -77,22 +77,131 @@ async function notifyDeveloper(text: string) {
   try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
-async function callAI(prompt: string, systemPrompt: string, imageUrl?: string): Promise<string> {
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 800): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+function humanError(context: string, err: any): string {
+  const msg = String(err?.message || err || '');
+  if (/429|rate/i.test(msg)) return `⏳ ${context}: السيرفر مضغوط شوية، جرّب بعد دقيقة 🙏`;
+  if (/402|credit|quota/i.test(msg)) return `💳 ${context}: رصيد الخدمة خلص، أبلّغ المطور.`;
+  if (/timeout|ETIMEDOUT|abort/i.test(msg)) return `🐢 ${context}: الاتصال بطيء، حاولت تاني ولم ينجح.`;
+  if (/5\d\d/.test(msg)) return `🛠️ ${context}: في عطل بسيط من جهة الخدمة، جرّب بعد قليل.`;
+  return `⚠️ ${context}: حصلت مشكلة بسيطة، جرّب تاني أو غيّر الصياغة.`;
+}
+
+async function callAI(prompt: string, systemPrompt: string, imageUrl?: string, model = 'google/gemini-2.5-flash'): Promise<string> {
   const userContent: any = imageUrl
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl } }]
     : prompt;
 
-  const res = await fetch(AI_GATEWAY_URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
-    }),
-  });
-  if (!res.ok) throw new Error(`AI error: ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
+  return await withRetry(async () => {
+    const res = await fetch(AI_GATEWAY_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
+      }),
+    });
+    if (res.status === 429 || res.status >= 500) throw new Error(`AI ${res.status}`);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`AI ${res.status}: ${t}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || '';
+  }, 3, 1000);
+}
+
+// ==================== CODE EXECUTION (Piston API) ====================
+
+const PISTON_LANGS: Record<string, { language: string; version: string }> = {
+  python: { language: 'python', version: '3.10.0' },
+  py: { language: 'python', version: '3.10.0' },
+  js: { language: 'javascript', version: '18.15.0' },
+  javascript: { language: 'javascript', version: '18.15.0' },
+  node: { language: 'javascript', version: '18.15.0' },
+  ts: { language: 'typescript', version: '5.0.3' },
+  bash: { language: 'bash', version: '5.2.0' },
+  sh: { language: 'bash', version: '5.2.0' },
+};
+
+async function executeCode(lang: string, code: string): Promise<string> {
+  const cfg = PISTON_LANGS[lang.toLowerCase()];
+  if (!cfg) return `❌ اللغة غير مدعومة. المدعوم: python, javascript, typescript, bash`;
+  try {
+    const result = await withRetry(async () => {
+      const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: cfg.language,
+          version: cfg.version,
+          files: [{ content: code }],
+          stdin: '',
+          compile_timeout: 10000,
+          run_timeout: 8000,
+        }),
+      });
+      if (!res.ok) throw new Error(`piston ${res.status}`);
+      return await res.json();
+    }, 2, 1500);
+
+    const run = result.run || {};
+    const compile = result.compile || {};
+    const out = (compile.stderr || '') + (run.stdout || '') + (run.stderr || '');
+    const trimmed = out.trim() || '(لا يوجد مخرج)';
+    const truncated = trimmed.length > 3500 ? trimmed.slice(0, 3500) + '\n...[مقطوع]' : trimmed;
+    const status = run.code === 0 ? '✅' : `⚠️ exit=${run.code}`;
+    return `${status} <b>${cfg.language}</b>\n<pre>${escapeHtml(truncated)}</pre>`;
+  } catch (e) {
+    return humanError('تشغيل الكود', e);
+  }
+}
+
+// ==================== VIDEO DOWNLOADER ====================
+
+async function tryCobalt(url: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ url, vQuality: '720', aFormat: 'mp3' }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status === 'stream' || data.status === 'redirect' || data.status === 'tunnel') return data.url;
+    if (data.url) return data.url;
+    return null;
+  } catch { return null; }
+}
+
+async function tryTikwm(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.data?.hdplay || data?.data?.play || null;
+  } catch { return null; }
+}
+
+async function downloadVideo(url: string): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
+  const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
+  // Try cobalt first (supports YT, IG, TT, etc.)
+  let direct = await tryCobalt(url);
+  if (!direct && isTikTok) direct = await tryTikwm(url);
+  if (!direct) {
+    return { ok: false, message: '😕 ما قدرت أحمّل الفيديو من اللينك ده. جرّب لينك تاني أو تأكد إن الفيديو متاح للعموم.' };
+  }
+  return { ok: true, videoUrl: direct, message: '✅ تم استخراج الفيديو' };
 }
 
 async function safeRpc(supabase: any, fn: string, params: any) {
