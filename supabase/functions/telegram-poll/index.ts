@@ -77,22 +77,131 @@ async function notifyDeveloper(text: string) {
   try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
-async function callAI(prompt: string, systemPrompt: string, imageUrl?: string): Promise<string> {
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 800): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn(); } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+function humanError(context: string, err: any): string {
+  const msg = String(err?.message || err || '');
+  if (/429|rate/i.test(msg)) return `⏳ ${context}: السيرفر مضغوط شوية، جرّب بعد دقيقة 🙏`;
+  if (/402|credit|quota/i.test(msg)) return `💳 ${context}: رصيد الخدمة خلص، أبلّغ المطور.`;
+  if (/timeout|ETIMEDOUT|abort/i.test(msg)) return `🐢 ${context}: الاتصال بطيء، حاولت تاني ولم ينجح.`;
+  if (/5\d\d/.test(msg)) return `🛠️ ${context}: في عطل بسيط من جهة الخدمة، جرّب بعد قليل.`;
+  return `⚠️ ${context}: حصلت مشكلة بسيطة، جرّب تاني أو غيّر الصياغة.`;
+}
+
+async function callAI(prompt: string, systemPrompt: string, imageUrl?: string, model = 'google/gemini-2.5-flash'): Promise<string> {
   const userContent: any = imageUrl
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl } }]
     : prompt;
 
-  const res = await fetch(AI_GATEWAY_URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'google/gemini-2.5-flash',
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
-    }),
-  });
-  if (!res.ok) throw new Error(`AI error: ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
+  return await withRetry(async () => {
+    const res = await fetch(AI_GATEWAY_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
+      }),
+    });
+    if (res.status === 429 || res.status >= 500) throw new Error(`AI ${res.status}`);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`AI ${res.status}: ${t}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || '';
+  }, 3, 1000);
+}
+
+// ==================== CODE EXECUTION (Piston API) ====================
+
+const PISTON_LANGS: Record<string, { language: string; version: string }> = {
+  python: { language: 'python', version: '3.10.0' },
+  py: { language: 'python', version: '3.10.0' },
+  js: { language: 'javascript', version: '18.15.0' },
+  javascript: { language: 'javascript', version: '18.15.0' },
+  node: { language: 'javascript', version: '18.15.0' },
+  ts: { language: 'typescript', version: '5.0.3' },
+  bash: { language: 'bash', version: '5.2.0' },
+  sh: { language: 'bash', version: '5.2.0' },
+};
+
+async function executeCode(lang: string, code: string): Promise<string> {
+  const cfg = PISTON_LANGS[lang.toLowerCase()];
+  if (!cfg) return `❌ اللغة غير مدعومة. المدعوم: python, javascript, typescript, bash`;
+  try {
+    const result = await withRetry(async () => {
+      const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: cfg.language,
+          version: cfg.version,
+          files: [{ content: code }],
+          stdin: '',
+          compile_timeout: 10000,
+          run_timeout: 8000,
+        }),
+      });
+      if (!res.ok) throw new Error(`piston ${res.status}`);
+      return await res.json();
+    }, 2, 1500);
+
+    const run = result.run || {};
+    const compile = result.compile || {};
+    const out = (compile.stderr || '') + (run.stdout || '') + (run.stderr || '');
+    const trimmed = out.trim() || '(لا يوجد مخرج)';
+    const truncated = trimmed.length > 3500 ? trimmed.slice(0, 3500) + '\n...[مقطوع]' : trimmed;
+    const status = run.code === 0 ? '✅' : `⚠️ exit=${run.code}`;
+    return `${status} <b>${cfg.language}</b>\n<pre>${escapeHtml(truncated)}</pre>`;
+  } catch (e) {
+    return humanError('تشغيل الكود', e);
+  }
+}
+
+// ==================== VIDEO DOWNLOADER ====================
+
+async function tryCobalt(url: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ url, vQuality: '720', aFormat: 'mp3' }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.status === 'stream' || data.status === 'redirect' || data.status === 'tunnel') return data.url;
+    if (data.url) return data.url;
+    return null;
+  } catch { return null; }
+}
+
+async function tryTikwm(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.data?.hdplay || data?.data?.play || null;
+  } catch { return null; }
+}
+
+async function downloadVideo(url: string): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
+  const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
+  // Try cobalt first (supports YT, IG, TT, etc.)
+  let direct = await tryCobalt(url);
+  if (!direct && isTikTok) direct = await tryTikwm(url);
+  if (!direct) {
+    return { ok: false, message: '😕 ما قدرت أحمّل الفيديو من اللينك ده. جرّب لينك تاني أو تأكد إن الفيديو متاح للعموم.' };
+  }
+  return { ok: true, videoUrl: direct, message: '✅ تم استخراج الفيديو' };
 }
 
 async function safeRpc(supabase: any, fn: string, params: any) {
@@ -287,24 +396,43 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
     } catch (e) { console.error('Photo error:', e); }
   }
 
-  const systemPrompt = `أنت فادي، مساعد ذكي لمجموعات تيليجرام. كن مهنياً ومفيداً وجاداً. تجنب المزاح إلا إذا طُلب منك ذلك صراحةً. أجب بدقة واختصار.
-المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
-المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء: ${(groupMembers || []).length}
-${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${replyMsg.text || '(وسائط)'}"` : ''}
+  const systemPrompt = `أنت "فادي"، وكيل ذكاء اصطناعي متقدم لمجموعة تيليجرام. هويتك واحدة وقدراتك متعددة.
+مهنتك: تفهم السياق بعمق (نص + صور)، تحلّل النية، تتخذ قرارات ذكية، وتنفّذ المهام الإدارية.
 
-قواعد مهمة:
-- كن جاداً ومختصراً (2-3 أسطر).
-- لا تمزح إلا إذا طُلب.
-- إذا طلب المستخدم إجراء إداري وكان مشرفاً أو المطور، أضف: [ACTION:{"type":"ban/kick/mute/unmute/warn","target_user_id":123}]
-- يمكنك تنفيذ أوامر مثل: حظر، طرد، كتم، إلغاء كتم، تحذير، ترقية، تخفيض، تثبيت رسالة.
-- إذا طلب المستخدم إجراءً إدارياً بلغة طبيعية (مثل "احظر هذا" أو "اطرده") وكان مشرفاً/المطور، نفذ الأمر.
-- لا تُنشئ JSON إلا عند طلب إداري.`;
+المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
+المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء مسجّلون: ${(groupMembers || []).length}
+${replyMsg ? `يردّ على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${(replyMsg.text || '(وسائط)').slice(0, 200)}"` : ''}
+
+قواعد الرد:
+- نبرتك جادة، ودودة، مهنية، مختصرة (2-4 أسطر) — بدون مزاح إلا لو طُلب.
+- لا تكشف رسائل خطأ تقنية. لو فشل شيء، اشرح بشرياً واقترح بديل.
+
+لو في صورة:
+- لا تكتفِ بالوصف السطحي. حلّل بعمق:
+  • السياق العام (إيه اللي بيحصل ولماذا؟)
+  • العناصر (أشخاص، أشياء، نصوص، مشاعر، بيئة)
+  • نوع الصورة (ميم، إعلان، لقطة شاشة، صورة شخصية، تصميم، خطأ برمجي...)
+  • لو فيها نص: استخرجه وحلّله
+  • لو غامضة: اطلب توضيح بذكاء
+- جاوب على سؤال المستخدم بدقة بناءً على الصورة.
+
+أوامر إدارية بلغة طبيعية (احظر/اطرد/اكتم/حذّر/رقّي):
+- لو المستخدم مشرف أو المطور وطلب إجراء على شخص (بالرد عليه أو بذكر ID)، أضف في نهاية ردك بالضبط:
+  [ACTION:{"type":"ban|kick|mute|unmute|warn|promote|demote","target_user_id":<ID>}]
+- لا تُنشئ JSON إلا للإجراءات الفعلية.`;
 
   try {
-    const userPrompt = text || (imageUrl ? 'صورة مرسلة، صفها بإيجاز' : '');
+    const userPrompt = text || (imageUrl ? 'حلّل هذه الصورة بعمق وأخبرني ما الذي تراه ولماذا.' : '');
     if (!userPrompt && !imageUrl) return;
 
-    const reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    let reply: string;
+    try {
+      reply = await callAI(userPrompt, systemPrompt, imageUrl);
+    } catch (e) {
+      // Fallback to a different model on persistent failure
+      try { reply = await callAI(userPrompt, systemPrompt, imageUrl, 'google/gemini-2.5-flash-lite'); }
+      catch (e2) { await sendMsg(chatId, humanError('الرد الذكي', e2), undefined, messageId); return; }
+    }
     if (!reply) return;
 
     let cleanReply = reply;
@@ -329,7 +457,10 @@ ${replyMsg ? `الرد على: ${replyMsg.from?.first_name || 'مجهول'} (ID:
       } catch (e) { console.error('AI action error:', e); }
     }
     if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
-  } catch (e) { console.error('AI error:', e); }
+  } catch (e) {
+    console.error('AI error:', e);
+    await sendMsg(chatId, humanError('الرد الذكي', e), undefined, messageId);
+  }
 }
 
 // ==================== FEATURE 3: TOXICITY FILTER ====================
@@ -861,12 +992,108 @@ async function handleCommand(supabase: any, update: any) {
       break;
 
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev`);
+      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n💻 <b>تشغيل أكواد:</b>\n/run python &lt;كود&gt; — وأيضاً js / typescript / bash\n\n📥 <b>تحميل فيديو:</b>\n/download &lt;رابط&gt; (TikTok / YouTube / Instagram)\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev\n\n🛠️ <b>للمطور فقط:</b> /send /sendmulti /broadcast /togglefeature /retry`);
       break;
 
     case '/dev': case '/developer': case '/owner':
       await sendMsg(chatId, `👨‍💻 <b>المطور:</b>`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
       break;
+
+    // ==================== CODE EXECUTION ====================
+    case '/run': case '/exec': case '/code': {
+      const lang = (args[0] || '').trim();
+      let code = args.slice(1).join(' ').trim();
+      if (!code && replyMsg?.text) code = replyMsg.text;
+      if (!lang || !code) { await sendMsg(chatId, '💻 الاستخدام:\n<code>/run python\nprint("Hello")</code>\n\nأو رد على رسالة فيها كود:\n<code>/run python</code>'); break; }
+      await sendMsg(chatId, `⚙️ بشغّل الكود (${escapeHtml(lang)})...`);
+      const result = await executeCode(lang, code);
+      await sendMsg(chatId, result, undefined, msg.message_id);
+      break;
+    }
+
+    // ==================== VIDEO DOWNLOAD ====================
+    case '/download': case '/dl': case '/تنزيل': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📥 ابعت رابط الفيديو:\n<code>/download https://...</code>\n\nمدعوم: TikTok / YouTube / Instagram'); break; }
+      await sendMsg(chatId, '⏳ جاري استخراج الفيديو، لحظة من فضلك...');
+      try {
+        const res = await downloadVideo(url);
+        if (!res.ok || !res.videoUrl) { await sendMsg(chatId, res.message); break; }
+        try {
+          await tgCall('sendVideo', { chat_id: chatId, video: res.videoUrl, caption: '✅ تفضّل الفيديو', reply_to_message_id: msg.message_id });
+        } catch {
+          await sendMsg(chatId, `✅ تم الاستخراج. الرابط المباشر:\n${escapeHtml(res.videoUrl)}`, undefined, msg.message_id);
+        }
+      } catch (e) {
+        await sendMsg(chatId, humanError('تحميل الفيديو', e), undefined, msg.message_id);
+      }
+      break;
+    }
+
+    // ==================== DEVELOPER-ONLY ADMIN COMMANDS ====================
+    case '/send': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const target = parseInt(args[0]);
+      const message = args.slice(1).join(' ');
+      if (!target || !message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/send &lt;user_id&gt; &lt;الرسالة&gt;</code>'); break; }
+      try {
+        await tgCall('sendMessage', { chat_id: target, text: `📨 <b>رسالة من المطور:</b>\n\n${message}`, parse_mode: 'HTML' });
+        await sendMsg(chatId, `✅ تم الإرسال إلى <code>${target}</code>`);
+      } catch (e) { await sendMsg(chatId, humanError('الإرسال', e)); }
+      break;
+    }
+
+    case '/sendmulti': case '/send_multi': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const idsRaw = args[0] || '';
+      const message = args.slice(1).join(' ');
+      const ids = idsRaw.split(/[,،\s]+/).map(s => parseInt(s)).filter(n => !isNaN(n));
+      if (ids.length === 0 || !message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/sendmulti 111,222,333 الرسالة</code>'); break; }
+      let sent = 0, failed = 0;
+      for (const id of ids) {
+        try { await tgCall('sendMessage', { chat_id: id, text: `📨 <b>رسالة من المطور:</b>\n\n${message}`, parse_mode: 'HTML' }); sent++; }
+        catch { failed++; }
+      }
+      await sendMsg(chatId, `📊 النتيجة: ✅ ${sent} نجحت | ❌ ${failed} فشلت`);
+      break;
+    }
+
+    case '/broadcast': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const message = args.join(' ');
+      if (!message) { await sendMsg(chatId, '🛠️ الاستخدام: <code>/broadcast الرسالة</code>'); break; }
+      const { data: groups } = await supabase.from('telegram_groups').select('chat_id');
+      let sent = 0, failed = 0;
+      for (const g of (groups || [])) {
+        try { await tgCall('sendMessage', { chat_id: g.chat_id, text: `📢 <b>إشعار من المطور:</b>\n\n${message}`, parse_mode: 'HTML' }); sent++; }
+        catch { failed++; }
+      }
+      await sendMsg(chatId, `📊 البث: ✅ ${sent} مجموعة | ❌ ${failed} فشلت`);
+      break;
+    }
+
+    case '/togglefeature': case '/toggle_feature': case '/toggle': {
+      if (!isDeveloper(userId) && !(await isAdmin(chatId, userId))) { await sendMsg(chatId, '🔒 للمشرفين والمطور فقط.'); break; }
+      const feature = args[0];
+      const value = (args[1] || '').toLowerCase();
+      const allowed = ['anti_spam', 'anti_flood', 'anti_forward_spam', 'captcha_enabled', 'toxicity_filter', 'raid_protection', 'auto_faq_enabled', 'lock_links', 'lock_media', 'lock_stickers', 'lock_files', 'restrict_new_accounts'];
+      if (!feature || !allowed.includes(feature)) { await sendMsg(chatId, `🛠️ الاستخدام:\n<code>/toggle &lt;feature&gt; on|off</code>\n\nالميزات:\n${allowed.map(f => `• <code>${f}</code>`).join('\n')}`); break; }
+      const newVal = value === 'on' || value === 'true' || value === '1';
+      await supabase.from('telegram_groups').update({ [feature]: newVal }).eq('chat_id', chatId);
+      await sendMsg(chatId, `${newVal ? '✅' : '🔕'} <b>${feature}</b> = ${newVal ? 'مفعّل' : 'موقوف'}`);
+      break;
+    }
+
+    case '/retry': case '/retry_failed': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const { data: failedScheduled } = await supabase.from('telegram_scheduled_messages').select('*').eq('sent', false).lte('scheduled_at', new Date().toISOString()).limit(50);
+      let retried = 0;
+      for (const m of (failedScheduled || [])) {
+        try { await sendMsg(m.chat_id, `⏰ <b>رسالة مجدولة:</b>\n\n${m.message}`); await supabase.from('telegram_scheduled_messages').update({ sent: true }).eq('id', m.id); retried++; } catch {}
+      }
+      await sendMsg(chatId, `🔁 تمت إعادة محاولة ${retried} رسالة.`);
+      break;
+    }
 
     // ==================== SEARCH COMMANDS ====================
     case '/searchbook': case '/كتاب': {
