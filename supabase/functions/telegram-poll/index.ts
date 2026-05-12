@@ -1816,7 +1816,10 @@ Deno.serve(async () => {
         try {
           if (update.message) await handleCommand(supabase, update);
           if (update.callback_query) await handleCallback(supabase, update.callback_query);
-        } catch (e) { console.error('Error:', e); }
+        } catch (e: any) {
+          console.error('Error:', e);
+          await logSystem('error', 'update_handler_failed', e?.message || String(e), { update_id: update.update_id });
+        }
       }
 
       totalProcessed += updates.length;
@@ -1826,8 +1829,9 @@ Deno.serve(async () => {
     }
 
     return new Response(JSON.stringify({ ok: true, processed: totalProcessed }), { headers: corsHeaders });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Poll error:', error);
+    try { await logSystem('error', 'poll_loop_failed', error?.message || String(error)); } catch {}
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown' }), { status: 500, headers: corsHeaders });
   }
 });
