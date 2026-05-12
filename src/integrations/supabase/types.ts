@@ -14,6 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
+      system_logs: {
+        Row: {
+          chat_id: number | null
+          context: Json | null
+          created_at: string
+          event: string
+          id: string
+          level: string
+          message: string | null
+          source: string
+          user_id: number | null
+        }
+        Insert: {
+          chat_id?: number | null
+          context?: Json | null
+          created_at?: string
+          event: string
+          id?: string
+          level?: string
+          message?: string | null
+          source?: string
+          user_id?: number | null
+        }
+        Update: {
+          chat_id?: number | null
+          context?: Json | null
+          created_at?: string
+          event?: string
+          id?: string
+          level?: string
+          message?: string | null
+          source?: string
+          user_id?: number | null
+        }
+        Relationships: []
+      }
       telegram_admin_logs: {
         Row: {
           action: string
@@ -749,6 +785,7 @@ export type Database = {
     }
     Functions: {
       cleanup_old_raid_joins: { Args: never; Returns: undefined }
+      cleanup_old_system_logs: { Args: never; Returns: undefined }
       increment_coins: {
         Args: { p_amount: number; p_chat_id: number; p_user_id: number }
         Returns: undefined
