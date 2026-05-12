@@ -77,6 +77,25 @@ async function notifyDeveloper(text: string) {
   try { await sendMsg(DEVELOPER_ID, text); } catch (e) { console.error('Notify dev error:', e); }
 }
 
+// Persist log entry to system_logs (visible in dashboard Console panel, realtime)
+async function logSystem(
+  level: 'info' | 'warn' | 'error' | 'debug',
+  event: string,
+  message?: string,
+  context: Record<string, any> = {},
+  chatId?: number,
+  userId?: number,
+) {
+  try {
+    const supabase = getSupabase();
+    await supabase.from('system_logs').insert({
+      level, source: 'telegram-poll', event,
+      message: message?.slice(0, 1000) ?? null,
+      context, chat_id: chatId ?? null, user_id: userId ?? null,
+    });
+  } catch (e) { console.error('logSystem failed:', e); }
+}
+
 async function withRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 800): Promise<T> {
   let lastErr: any;
   for (let i = 0; i < attempts; i++) {
