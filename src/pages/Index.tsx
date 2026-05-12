@@ -29,6 +29,7 @@ const Index = () => {
       case "economy": return <EconomyPanel />;
       case "tickets": return <TicketsPanel />;
       case "broadcast": return <BroadcastPanel />;
+      case "console": return <ConsolePanel />;
       case "settings": return <SettingsPanel />;
       default: return <DashboardHome />;
     }
