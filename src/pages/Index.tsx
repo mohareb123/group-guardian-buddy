@@ -10,8 +10,9 @@ import SettingsPanel from "@/components/dashboard/SettingsPanel";
 import EconomyPanel from "@/components/dashboard/EconomyPanel";
 import TicketsPanel from "@/components/dashboard/TicketsPanel";
 import BroadcastPanel from "@/components/dashboard/BroadcastPanel";
+import ConsolePanel from "@/components/dashboard/ConsolePanel";
 
-export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets" | "broadcast";
+export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets" | "broadcast" | "console";
 
 const Index = () => {
   const [activePanel, setActivePanel] = useState<PanelId>("home");
