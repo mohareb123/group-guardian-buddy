@@ -1875,6 +1875,52 @@ async function handleCallback(supabase: any, cq: any) {
   const userId = cq.from.id;
   const chatId = cq.message?.chat.id;
 
+
+  // Menu navigation
+  if (data.startsWith('menu:') || data.startsWith('help:')) {
+    const [kind, key] = data.split(':');
+    await tgCall('answerCallbackQuery', { callback_query_id: cq.id });
+    if (kind === 'menu' && key === 'main') {
+      const me = await tgCall('getMe').catch(() => ({ result: { username: 'bot' } }));
+      const botUsername = me?.result?.username || 'bot';
+      await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: `🎛️ <b>لوحة تحكم Groups Master</b>\n━━━━━━━━━━━━━━━\nاختر القسم اللي عايزه 👇`, parse_mode: 'HTML', reply_markup: { inline_keyboard: mainMenuKeyboard(botUsername, cq.message.chat.type !== 'private') } });
+      return;
+    }
+    if (kind === 'menu' && key === 'help') {
+      await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: helpMenuText('all'), parse_mode: 'HTML', reply_markup: { inline_keyboard: helpCategoriesKeyboard() } });
+      return;
+    }
+    const cat = key === 'main' ? 'all' : key;
+    await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: helpMenuText(cat), parse_mode: 'HTML', reply_markup: { inline_keyboard: helpCategoriesKeyboard() } });
+    return;
+  }
+
+  // Host quick actions
+  if (data.startsWith('host:')) {
+    const [, action, ...rest] = data.split(':');
+    const name = rest.join(':');
+    const { data: project } = await supabase.from('hosted_projects').select('*').eq('owner_id', userId).eq('name', name).single();
+    if (!project) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ المشروع غير موجود', show_alert: true }); return; }
+    if (action === 'run') {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '⚙️ بشغّل...' });
+      const res = await runHostedProject(project);
+      await supabase.from('hosted_projects').update({ run_count: (project.run_count || 0) + 1, last_run_at: new Date().toISOString(), last_output: res.output.slice(0, 4000), last_exit_code: res.exitCode, last_duration_ms: res.durationMs }).eq('id', project.id);
+      await supabase.from('hosting_runs').insert({ project_id: project.id, owner_id: userId, status: res.ok ? 'success' : 'failed', exit_code: res.exitCode, duration_ms: res.durationMs, stdout: res.stdout.slice(0, 4000), stderr: res.stderr.slice(0, 4000) });
+      const status = res.ok ? '✅' : `⚠️ exit=${res.exitCode}`;
+      const out = res.output.length > 3500 ? res.output.slice(0, 3500) + '\n...[مقطوع]' : res.output;
+      await sendMsg(chatId, `${status} <b>${escapeHtml(name)}</b> · ${res.durationMs}ms\n<pre>${escapeHtml(out)}</pre>`, { inline_keyboard: [[{ text: '🔄 شغّل تاني', callback_data: `host:run:${name}` }, { text: '📄 الكود', callback_data: `host:code:${name}` }]] });
+      return;
+    }
+    if (action === 'code') {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id });
+      const files = Array.isArray(project.files) ? project.files : [];
+      for (const f of files.slice(0, 5)) {
+        await sendMsg(chatId, `📄 <b>${escapeHtml(f.name)}</b>\n<pre>${escapeHtml((f.content || '').slice(0, 3500))}</pre>`);
+      }
+      return;
+    }
+  }
+
   if (data.startsWith('quiz_')) {
     const [, sel, cor] = data.split('_');
     if (sel === cor) {
