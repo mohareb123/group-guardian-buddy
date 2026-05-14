@@ -14,6 +14,107 @@ export type Database = {
   }
   public: {
     Tables: {
+      hosted_projects: {
+        Row: {
+          chat_id: number | null
+          created_at: string
+          files: Json
+          id: string
+          language: string
+          last_duration_ms: number | null
+          last_exit_code: number | null
+          last_output: string | null
+          last_run_at: string | null
+          name: string
+          owner_id: number
+          owner_username: string | null
+          run_count: number
+          status: string
+          stdin: string | null
+          updated_at: string
+        }
+        Insert: {
+          chat_id?: number | null
+          created_at?: string
+          files?: Json
+          id?: string
+          language?: string
+          last_duration_ms?: number | null
+          last_exit_code?: number | null
+          last_output?: string | null
+          last_run_at?: string | null
+          name: string
+          owner_id: number
+          owner_username?: string | null
+          run_count?: number
+          status?: string
+          stdin?: string | null
+          updated_at?: string
+        }
+        Update: {
+          chat_id?: number | null
+          created_at?: string
+          files?: Json
+          id?: string
+          language?: string
+          last_duration_ms?: number | null
+          last_exit_code?: number | null
+          last_output?: string | null
+          last_run_at?: string | null
+          name?: string
+          owner_id?: number
+          owner_username?: string | null
+          run_count?: number
+          status?: string
+          stdin?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      hosting_runs: {
+        Row: {
+          created_at: string
+          duration_ms: number | null
+          exit_code: number | null
+          id: string
+          owner_id: number
+          project_id: string | null
+          status: string
+          stderr: string | null
+          stdout: string | null
+        }
+        Insert: {
+          created_at?: string
+          duration_ms?: number | null
+          exit_code?: number | null
+          id?: string
+          owner_id: number
+          project_id?: string | null
+          status?: string
+          stderr?: string | null
+          stdout?: string | null
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number | null
+          exit_code?: number | null
+          id?: string
+          owner_id?: number
+          project_id?: string | null
+          status?: string
+          stderr?: string | null
+          stdout?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hosting_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "hosted_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       system_logs: {
         Row: {
           chat_id: number | null

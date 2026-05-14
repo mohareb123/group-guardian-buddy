@@ -186,6 +186,128 @@ async function executeCode(lang: string, code: string): Promise<string> {
   }
 }
 
+// ==================== HOSTED PROJECTS (multi-file Piston runtime) ====================
+
+type HostedFile = { name: string; content: string };
+
+async function runHostedProject(project: any): Promise<{ ok: boolean; output: string; exitCode: number; durationMs: number; stdout: string; stderr: string }> {
+  const cfg = PISTON_LANGS[(project.language || 'python').toLowerCase()];
+  if (!cfg) return { ok: false, output: '❌ لغة المشروع غير مدعومة', exitCode: -1, durationMs: 0, stdout: '', stderr: 'unsupported language' };
+  const files: HostedFile[] = Array.isArray(project.files) && project.files.length > 0
+    ? project.files
+    : [{ name: cfg.language === 'python' ? 'main.py' : cfg.language === 'javascript' ? 'main.js' : 'main.txt', content: '' }];
+  const t0 = Date.now();
+  try {
+    const result = await withRetry(async () => {
+      const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: cfg.language, version: cfg.version,
+          files: files.map(f => ({ name: f.name, content: f.content })),
+          stdin: project.stdin || '',
+          compile_timeout: 10000, run_timeout: 10000,
+        }),
+      });
+      if (!res.ok) throw new Error(`piston ${res.status}`);
+      return await res.json();
+    }, 2, 1500);
+    const run = result.run || {}; const compile = result.compile || {};
+    const stdout = (run.stdout || '').toString();
+    const stderr = ((compile.stderr || '') + (run.stderr || '')).toString();
+    const exitCode = typeof run.code === 'number' ? run.code : -1;
+    const durationMs = Date.now() - t0;
+    const combined = (stdout + (stderr ? '\n--- STDERR ---\n' + stderr : '')).trim() || '(لا يوجد مخرج)';
+    return { ok: exitCode === 0, output: combined, exitCode, durationMs, stdout, stderr };
+  } catch (e: any) {
+    return { ok: false, output: humanError('تشغيل المشروع', e), exitCode: -1, durationMs: Date.now() - t0, stdout: '', stderr: String(e?.message || e) };
+  }
+}
+
+async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise<string | null> {
+  try {
+    const info = await tgCall('getFile', { file_id: fileId });
+    const filePath = info?.result?.file_path; if (!filePath) return null;
+    const res = await fetch(`${GATEWAY_URL}/file/${filePath}`, { headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'X-Connection-Api-Key': getEnv('TELEGRAM_API_KEY') } });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > maxBytes) return null;
+    return new TextDecoder('utf-8').decode(buf);
+  } catch { return null; }
+}
+
+function inferLangFromFilename(name: string): string {
+  const n = name.toLowerCase();
+  if (n.endsWith('.py')) return 'python';
+  if (n.endsWith('.js') || n.endsWith('.mjs')) return 'javascript';
+  if (n.endsWith('.ts')) return 'typescript';
+  if (n.endsWith('.sh') || n.endsWith('.bash')) return 'bash';
+  return 'python';
+}
+
+// ==================== UI: MENU KEYBOARDS ====================
+
+function mainMenuKeyboard(botUsername: string, inGroup = false): any[][] {
+  const rows: any[][] = [
+    [
+      { text: '🛡️ الحماية', callback_data: 'menu:protect' },
+      { text: '👑 الإدارة', callback_data: 'menu:admin' },
+    ],
+    [
+      { text: '☁️ الاستضافة', callback_data: 'menu:host' },
+      { text: '🤖 فادي AI', callback_data: 'menu:ai' },
+    ],
+    [
+      { text: '💰 الاقتصاد', callback_data: 'menu:economy' },
+      { text: '🔍 البحث', callback_data: 'menu:search' },
+    ],
+    [
+      { text: '📥 تنزيل ميديا', callback_data: 'menu:media' },
+      { text: '🎮 الترفيه', callback_data: 'menu:fun' },
+    ],
+    [
+      { text: '📋 كل الأوامر', callback_data: 'menu:help' },
+      { text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
+    ],
+  ];
+  if (!inGroup) rows.push([{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
+  return rows;
+}
+
+function helpCategoriesKeyboard(): any[][] {
+  return [
+    [{ text: '☁️ استضافة', callback_data: 'help:host' }, { text: '🤖 ذكاء', callback_data: 'help:ai' }],
+    [{ text: '👑 إدارة', callback_data: 'help:admin' }, { text: '🛡️ حماية', callback_data: 'help:protect' }],
+    [{ text: '💰 اقتصاد', callback_data: 'help:economy' }, { text: '🔍 بحث', callback_data: 'help:search' }],
+    [{ text: '📥 ميديا', callback_data: 'help:media' }, { text: '🎮 ترفيه', callback_data: 'help:fun' }],
+    [{ text: '📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
+  ];
+}
+
+function helpMenuText(cat: string): string {
+  const sections: Record<string, string> = {
+    host:
+`☁️ <b>منصة الاستضافة</b>\n━━━━━━━━━━━━━━\nشغّل وعدّل مشاريعك Python / JS / TS / Bash مع تخزين دائم.\n\n• <code>/host new &lt;الاسم&gt; &lt;اللغة&gt;</code> — أنشئ مشروع جديد\n• <code>/host upload &lt;الاسم&gt;</code> — ردّ على ملف لإضافته\n• <code>/host list</code> — كل مشاريعك\n• <code>/host code &lt;الاسم&gt;</code> — عرض الملفات\n• <code>/host run &lt;الاسم&gt;</code> — تشغيل المشروع\n• <code>/host logs &lt;الاسم&gt;</code> — آخر مخرج\n• <code>/host delete &lt;الاسم&gt;</code> — حذف\n\n⚡ كمان: <code>/run python كود</code> للتشغيل السريع.`,
+    ai:
+`🤖 <b>فادي — الوكيل الذكي</b>\n━━━━━━━━━━━━━━\nنادي عليه بكلمة <b>فادي</b> داخل أي رسالة. يفهم الصور، النصوص، والأوامر الإدارية بلغة طبيعية.\n\nأمثلة:\n• "فادي اكتم اللي رد دي ساعة"\n• "فادي حلل الصورة دي"\n• "فادي لخصلي آخر 10 رسائل"`,
+    admin:
+`👑 <b>أوامر الإدارة</b>\n━━━━━━━━━━━━━━\n/ban /unban /kick /mute /unmute\n/warn /unwarn /promote /demote\n/pin /unpin /report\n/tagall /all`,
+    protect:
+`🛡️ <b>الحماية</b>\n━━━━━━━━━━━━━━\n/lock /unlock /antispam /antiflood\n/nightmode /captcha /toxicity\n/slowmode /blacklist /restrict_new\n/security — عرض حالة الحماية الكاملة`,
+    economy:
+`💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
+    search:
+`🔍 <b>البحث</b>\n━━━━━━━━━━━━━━\n/searchbook — كتب\n/searchyt — يوتيوب\n/searchweb — ويب عام`,
+    media:
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt;\n\nمدعوم: TikTok • YouTube • Instagram • X\nيستخرج تلقائياً بأعلى جودة متاحة.`,
+    fun:
+`🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
+    all:
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\nاضغط أي قسم تحت لتفاصيله 👇\n\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🎮 ترفيه\n\n💡 كمان عندك:\n/menu — القائمة الرئيسية\n/dev — التواصل مع المطور`,
+  };
+  return sections[cat] || sections.all;
+}
+
 // ==================== VIDEO DOWNLOADER ====================
 
 async function tryCobalt(url: string): Promise<string | null> {
@@ -998,24 +1120,23 @@ async function handleCommand(supabase: any, update: any) {
             await sendMsg(chatId, '❌ انتهت صلاحية الهمسة. أعد المحاولة من المجموعة.');
           }
         } else {
-          await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي\n💰 نظام اقتصادي\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n🔍 بحث شامل\n\n📋 اكتب /help للأوامر`, {
-            inline_keyboard: [
-              [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
-              [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
-            ],
-          });
+          await sendMsg(chatId, `🤖 <b>منصة Groups Master</b>\n━━━━━━━━━━━━━━━\n\n✨ بوت إدارة احترافي بنظام:\n• 🧠 وكيل ذكاء اصطناعي (فادي)\n• 🛡️ حماية متقدمة ضد السبام والغارات\n• ☁️ <b>استضافة كود</b> Python / JS / TS / Bash\n• 📥 تنزيل فيديوهات (TikTok / YT / IG)\n• 💰 اقتصاد + متجر + تحديات\n• 📊 لوحة تحكم ويب كاملة\n\n👇 <b>اختر من القائمة:</b>`, { inline_keyboard: mainMenuKeyboard(botUsername) });
         }
       } else {
-        await sendMsg(chatId, `🤖 <b>أنا جاهز!</b> تكلم مع <b>فادي</b> أو اكتب /help`, { inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
+        await sendMsg(chatId, `🤖 <b>أنا جاهز!</b>\n\nاكتب /menu للقائمة الكاملة، أو نادي على <b>فادي</b> للمحادثة.`, { inline_keyboard: mainMenuKeyboard(botUsername, true) });
       }
       break;
 
+    case '/menu': case '/قائمة':
+      await sendMsg(chatId, `🎛️ <b>لوحة تحكم Groups Master</b>\n━━━━━━━━━━━━━━━\nاختر القسم اللي عايزه 👇`, { inline_keyboard: mainMenuKeyboard(botUsername, msg.chat.type !== 'private') });
+      break;
+
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n💻 <b>تشغيل أكواد:</b>\n/run python &lt;كود&gt; — وأيضاً js / typescript / bash\n\n📥 <b>تحميل فيديو:</b>\n/download &lt;رابط&gt; (TikTok / YouTube / Instagram)\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev\n\n🛠️ <b>للمطور فقط:</b> /send /sendmulti /broadcast /togglefeature /retry`);
+      await sendMsg(chatId, helpMenuText('all'), { inline_keyboard: helpCategoriesKeyboard() });
       break;
 
     case '/dev': case '/developer': case '/owner':
-      await sendMsg(chatId, `👨‍💻 <b>المطور:</b>`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
+      await sendMsg(chatId, `👨‍💻 <b>المطور</b>\n━━━━━━━━━━\n💬 للتواصل المباشر اضغط الزر:`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }], [{ text: '📢 قناة الدعم', url: 'https://t.me/Groupmastersupport' }]] });
       break;
 
     // ==================== CODE EXECUTION ====================
@@ -1027,6 +1148,110 @@ async function handleCommand(supabase: any, update: any) {
       await sendMsg(chatId, `⚙️ بشغّل الكود (${escapeHtml(lang)})...`);
       const result = await executeCode(lang, code);
       await sendMsg(chatId, result, undefined, msg.message_id);
+      break;
+    }
+
+    // ==================== HOSTED PROJECTS ====================
+    case '/host': case '/استضافة': case '/project': {
+      const sub = (args[0] || '').toLowerCase();
+      const HOST_HELP = `☁️ <b>منصة الاستضافة</b>\n━━━━━━━━━━━━━━\n<code>/host new &lt;الاسم&gt; &lt;لغة&gt;</code>\n<code>/host upload &lt;الاسم&gt;</code>  (ردّ على ملف)\n<code>/host list</code>\n<code>/host code &lt;الاسم&gt;</code>\n<code>/host run &lt;الاسم&gt;</code>\n<code>/host logs &lt;الاسم&gt;</code>\n<code>/host delete &lt;الاسم&gt;</code>\n\nاللغات: python, javascript, typescript, bash`;
+      if (!sub) { await sendMsg(chatId, HOST_HELP); break; }
+
+      if (sub === 'new' || sub === 'create') {
+        const name = (args[1] || '').trim();
+        const lang = (args[2] || 'python').toLowerCase();
+        if (!name) { await sendMsg(chatId, '❌ حدّد اسم المشروع: <code>/host new myapp python</code>'); break; }
+        if (!PISTON_LANGS[lang]) { await sendMsg(chatId, '❌ لغة غير مدعومة. اختر: python / javascript / typescript / bash'); break; }
+        const main = lang === 'python' ? 'main.py' : lang === 'javascript' ? 'main.js' : lang === 'typescript' ? 'main.ts' : 'main.sh';
+        const seed = lang === 'python' ? 'print("Hello from your hosted project!")' : lang === 'bash' ? 'echo "Hello"' : 'console.log("Hello from your hosted project!")';
+        const { error } = await supabase.from('hosted_projects').insert({
+          owner_id: userId, owner_username: msg.from.username || null, chat_id: chatId,
+          name, language: lang, files: [{ name: main, content: seed }], status: 'idle',
+        });
+        if (error) { await sendMsg(chatId, error.message.includes('unique') ? '❌ عندك مشروع بنفس الاسم بالفعل' : `❌ ${escapeHtml(error.message)}`); break; }
+        await sendMsg(chatId, `✅ <b>تم إنشاء المشروع</b>\n📦 <code>${escapeHtml(name)}</code>\n🔤 ${lang}\n📄 ${main}\n\n▶️ شغّله: <code>/host run ${escapeHtml(name)}</code>\n📤 ضيف ملفات: ردّ على ملف بـ <code>/host upload ${escapeHtml(name)}</code>`, {
+          inline_keyboard: [[{ text: '▶️ شغّل', callback_data: `host:run:${name}` }, { text: '📄 الكود', callback_data: `host:code:${name}` }]],
+        });
+        break;
+      }
+
+      if (sub === 'list' || sub === 'ls') {
+        const { data: projects } = await supabase.from('hosted_projects').select('name, language, status, run_count, last_run_at, last_exit_code').eq('owner_id', userId).order('updated_at', { ascending: false }).limit(20);
+        if (!projects || projects.length === 0) { await sendMsg(chatId, '📭 معندكش مشاريع. ابدأ بـ <code>/host new myapp python</code>'); break; }
+        const lines = projects.map((p: any, i: number) => {
+          const icon = p.last_exit_code === 0 ? '🟢' : p.last_exit_code == null ? '⚪' : '🔴';
+          return `${i+1}. ${icon} <b>${escapeHtml(p.name)}</b> · ${p.language} · شغّل ${p.run_count} مرة`;
+        }).join('\n');
+        await sendMsg(chatId, `☁️ <b>مشاريعك (${projects.length})</b>\n━━━━━━━━━━━━\n${lines}`);
+        break;
+      }
+
+      const projName = (args[1] || '').trim();
+      if (!projName) { await sendMsg(chatId, HOST_HELP); break; }
+      const { data: project } = await supabase.from('hosted_projects').select('*').eq('owner_id', userId).eq('name', projName).single();
+      if (!project) { await sendMsg(chatId, `❌ مفيش مشروع باسم <code>${escapeHtml(projName)}</code>`); break; }
+
+      if (sub === 'run' || sub === 'start') {
+        await sendMsg(chatId, `⚙️ بشغّل <b>${escapeHtml(projName)}</b>...`);
+        await supabase.from('hosted_projects').update({ status: 'running' }).eq('id', project.id);
+        const res = await runHostedProject(project);
+        await supabase.from('hosted_projects').update({
+          status: 'idle', run_count: (project.run_count || 0) + 1,
+          last_run_at: new Date().toISOString(), last_output: res.output.slice(0, 4000),
+          last_exit_code: res.exitCode, last_duration_ms: res.durationMs,
+        }).eq('id', project.id);
+        await supabase.from('hosting_runs').insert({
+          project_id: project.id, owner_id: userId, status: res.ok ? 'success' : 'failed',
+          exit_code: res.exitCode, duration_ms: res.durationMs,
+          stdout: res.stdout.slice(0, 4000), stderr: res.stderr.slice(0, 4000),
+        });
+        const status = res.ok ? '✅' : `⚠️ exit=${res.exitCode}`;
+        const out = res.output.length > 3500 ? res.output.slice(0, 3500) + '\n...[مقطوع]' : res.output;
+        await sendMsg(chatId, `${status} <b>${escapeHtml(projName)}</b> · ${res.durationMs}ms\n<pre>${escapeHtml(out)}</pre>`, {
+          inline_keyboard: [[{ text: '🔄 شغّل تاني', callback_data: `host:run:${projName}` }, { text: '📄 الكود', callback_data: `host:code:${projName}` }]],
+        });
+        break;
+      }
+
+      if (sub === 'code' || sub === 'view') {
+        const files = Array.isArray(project.files) ? project.files : [];
+        if (files.length === 0) { await sendMsg(chatId, '📭 المشروع فاضي. ضيف ملف بـ /host upload'); break; }
+        for (const f of files.slice(0, 5)) {
+          const content = (f.content || '').slice(0, 3500);
+          await sendMsg(chatId, `📄 <b>${escapeHtml(f.name)}</b>\n<pre>${escapeHtml(content)}</pre>`);
+        }
+        break;
+      }
+
+      if (sub === 'logs' || sub === 'log') {
+        const out = project.last_output || '(لم يتم تشغيل المشروع بعد)';
+        const status = project.last_exit_code === 0 ? '✅' : project.last_exit_code == null ? '⚪' : `⚠️ exit=${project.last_exit_code}`;
+        await sendMsg(chatId, `📜 <b>${escapeHtml(projName)}</b> · ${status} · ${project.last_duration_ms || 0}ms\n<pre>${escapeHtml(out.slice(0, 3500))}</pre>`);
+        break;
+      }
+
+      if (sub === 'delete' || sub === 'rm' || sub === 'del') {
+        await supabase.from('hosted_projects').delete().eq('id', project.id);
+        await sendMsg(chatId, `🗑️ تم حذف <b>${escapeHtml(projName)}</b>`);
+        break;
+      }
+
+      if (sub === 'upload' || sub === 'add') {
+        const doc = replyMsg?.document;
+        if (!doc) { await sendMsg(chatId, '📤 ردّ على رسالة فيها ملف ثم نفّذ <code>/host upload &lt;الاسم&gt;</code>'); break; }
+        if (doc.file_size > 64 * 1024) { await sendMsg(chatId, '❌ الملف كبير (الحد الأقصى 64KB)'); break; }
+        const content = await downloadTgFileText(doc.file_id);
+        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل محتوى الملف (لازم يكون نصي)'); break; }
+        const fname = doc.file_name || `file_${Date.now()}.txt`;
+        const files = Array.isArray(project.files) ? [...project.files] : [];
+        const idx = files.findIndex((f: any) => f.name === fname);
+        if (idx >= 0) files[idx] = { name: fname, content }; else files.push({ name: fname, content });
+        await supabase.from('hosted_projects').update({ files }).eq('id', project.id);
+        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف) للمشروع <b>${escapeHtml(projName)}</b>`);
+        break;
+      }
+
+      await sendMsg(chatId, HOST_HELP);
       break;
     }
 
@@ -1649,6 +1874,52 @@ async function handleCallback(supabase: any, cq: any) {
   const data = cq.data;
   const userId = cq.from.id;
   const chatId = cq.message?.chat.id;
+
+
+  // Menu navigation
+  if (data.startsWith('menu:') || data.startsWith('help:')) {
+    const [kind, key] = data.split(':');
+    await tgCall('answerCallbackQuery', { callback_query_id: cq.id });
+    if (kind === 'menu' && key === 'main') {
+      const me = await tgCall('getMe').catch(() => ({ result: { username: 'bot' } }));
+      const botUsername = me?.result?.username || 'bot';
+      await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: `🎛️ <b>لوحة تحكم Groups Master</b>\n━━━━━━━━━━━━━━━\nاختر القسم اللي عايزه 👇`, parse_mode: 'HTML', reply_markup: { inline_keyboard: mainMenuKeyboard(botUsername, cq.message.chat.type !== 'private') } });
+      return;
+    }
+    if (kind === 'menu' && key === 'help') {
+      await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: helpMenuText('all'), parse_mode: 'HTML', reply_markup: { inline_keyboard: helpCategoriesKeyboard() } });
+      return;
+    }
+    const cat = key === 'main' ? 'all' : key;
+    await tgCall('editMessageText', { chat_id: chatId, message_id: cq.message.message_id, text: helpMenuText(cat), parse_mode: 'HTML', reply_markup: { inline_keyboard: helpCategoriesKeyboard() } });
+    return;
+  }
+
+  // Host quick actions
+  if (data.startsWith('host:')) {
+    const [, action, ...rest] = data.split(':');
+    const name = rest.join(':');
+    const { data: project } = await supabase.from('hosted_projects').select('*').eq('owner_id', userId).eq('name', name).single();
+    if (!project) { await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '❌ المشروع غير موجود', show_alert: true }); return; }
+    if (action === 'run') {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: '⚙️ بشغّل...' });
+      const res = await runHostedProject(project);
+      await supabase.from('hosted_projects').update({ run_count: (project.run_count || 0) + 1, last_run_at: new Date().toISOString(), last_output: res.output.slice(0, 4000), last_exit_code: res.exitCode, last_duration_ms: res.durationMs }).eq('id', project.id);
+      await supabase.from('hosting_runs').insert({ project_id: project.id, owner_id: userId, status: res.ok ? 'success' : 'failed', exit_code: res.exitCode, duration_ms: res.durationMs, stdout: res.stdout.slice(0, 4000), stderr: res.stderr.slice(0, 4000) });
+      const status = res.ok ? '✅' : `⚠️ exit=${res.exitCode}`;
+      const out = res.output.length > 3500 ? res.output.slice(0, 3500) + '\n...[مقطوع]' : res.output;
+      await sendMsg(chatId, `${status} <b>${escapeHtml(name)}</b> · ${res.durationMs}ms\n<pre>${escapeHtml(out)}</pre>`, { inline_keyboard: [[{ text: '🔄 شغّل تاني', callback_data: `host:run:${name}` }, { text: '📄 الكود', callback_data: `host:code:${name}` }]] });
+      return;
+    }
+    if (action === 'code') {
+      await tgCall('answerCallbackQuery', { callback_query_id: cq.id });
+      const files = Array.isArray(project.files) ? project.files : [];
+      for (const f of files.slice(0, 5)) {
+        await sendMsg(chatId, `📄 <b>${escapeHtml(f.name)}</b>\n<pre>${escapeHtml((f.content || '').slice(0, 3500))}</pre>`);
+      }
+      return;
+    }
+  }
 
   if (data.startsWith('quiz_')) {
     const [, sel, cor] = data.split('_');
