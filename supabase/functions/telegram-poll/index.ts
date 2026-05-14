@@ -1057,24 +1057,23 @@ async function handleCommand(supabase: any, update: any) {
             await sendMsg(chatId, '❌ انتهت صلاحية الهمسة. أعد المحاولة من المجموعة.');
           }
         } else {
-          await sendMsg(chatId, `🤖 <b>مرحباً! أنا بوت إدارة المجموعات</b>\n\n✨ أقدر أساعدك في:\n🧠 إدارة بالذكاء الاصطناعي\n💰 نظام اقتصادي\n🏆 تحديات يومية\n🛡️ حماية متقدمة\n📊 تتبع سلوك الأعضاء\n🔍 بحث شامل\n\n📋 اكتب /help للأوامر`, {
-            inline_keyboard: [
-              [{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }],
-              [{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }],
-            ],
-          });
+          await sendMsg(chatId, `🤖 <b>منصة Groups Master</b>\n━━━━━━━━━━━━━━━\n\n✨ بوت إدارة احترافي بنظام:\n• 🧠 وكيل ذكاء اصطناعي (فادي)\n• 🛡️ حماية متقدمة ضد السبام والغارات\n• ☁️ <b>استضافة كود</b> Python / JS / TS / Bash\n• 📥 تنزيل فيديوهات (TikTok / YT / IG)\n• 💰 اقتصاد + متجر + تحديات\n• 📊 لوحة تحكم ويب كاملة\n\n👇 <b>اختر من القائمة:</b>`, { inline_keyboard: mainMenuKeyboard(botUsername) });
         }
       } else {
-        await sendMsg(chatId, `🤖 <b>أنا جاهز!</b> تكلم مع <b>فادي</b> أو اكتب /help`, { inline_keyboard: [[{ text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
+        await sendMsg(chatId, `🤖 <b>أنا جاهز!</b>\n\nاكتب /menu للقائمة الكاملة، أو نادي على <b>فادي</b> للمحادثة.`, { inline_keyboard: mainMenuKeyboard(botUsername, true) });
       }
       break;
 
+    case '/menu': case '/قائمة':
+      await sendMsg(chatId, `🎛️ <b>لوحة تحكم Groups Master</b>\n━━━━━━━━━━━━━━━\nاختر القسم اللي عايزه 👇`, { inline_keyboard: mainMenuKeyboard(botUsername, msg.chat.type !== 'private') });
+      break;
+
     case '/help':
-      await sendMsg(chatId, `📋 <b>الأوامر:</b>\n\n🤖 <b>ذكاء اصطناعي:</b> اذكر "فادي"\n\n👑 <b>إدارة:</b>\n/ban /unban /kick /mute /unmute /warn /unwarn /promote /demote /pin /unpin /report\n\n🔒 <b>حماية:</b>\n/lock /unlock /antispam /antiflood /nightmode /captcha /toxicity /slowmode /blacklist /restrict_new /security\n\n💰 <b>اقتصاد:</b>\n/coins /daily /shop /buy /gift /transfer\n\n🔍 <b>بحث:</b>\n/searchbook /searchyt /searchweb\n\n💻 <b>تشغيل أكواد:</b>\n/run python &lt;كود&gt; — وأيضاً js / typescript / bash\n\n📥 <b>تحميل فيديو:</b>\n/download &lt;رابط&gt; (TikTok / YouTube / Instagram)\n\n🏆 <b>تحديات:</b>\n/challenge /mychallenges\n\n📊 <b>تتبع:</b>\n/profile /trust /reputation /stats\n\n⚖️ <b>محكمة:</b>\n/court\n\n📝 <b>أدوات:</b>\n/faq /addfaq /save /saved /ticket /schedule /sticker\n\n🎮 <b>ترفيه:</b>\n/quiz /game /truth /dare /joke /hack /roll /flip /random\n\n💌 <b>همسات:</b> رد على رسالة واكتب "همسة" أو /whisper\n\n📢 /tagall /all\nℹ️ /id /info /top /points /dev\n\n🛠️ <b>للمطور فقط:</b> /send /sendmulti /broadcast /togglefeature /retry`);
+      await sendMsg(chatId, helpMenuText('all'), { inline_keyboard: helpCategoriesKeyboard() });
       break;
 
     case '/dev': case '/developer': case '/owner':
-      await sendMsg(chatId, `👨‍💻 <b>المطور:</b>`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }]] });
+      await sendMsg(chatId, `👨‍💻 <b>المطور</b>\n━━━━━━━━━━\n💬 للتواصل المباشر اضغط الزر:`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }], [{ text: '📢 قناة الدعم', url: 'https://t.me/Groupmastersupport' }]] });
       break;
 
     // ==================== CODE EXECUTION ====================
