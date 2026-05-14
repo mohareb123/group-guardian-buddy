@@ -245,6 +245,69 @@ function inferLangFromFilename(name: string): string {
   return 'python';
 }
 
+// ==================== UI: MENU KEYBOARDS ====================
+
+function mainMenuKeyboard(botUsername: string, inGroup = false): any[][] {
+  const rows: any[][] = [
+    [
+      { text: '🛡️ الحماية', callback_data: 'menu:protect' },
+      { text: '👑 الإدارة', callback_data: 'menu:admin' },
+    ],
+    [
+      { text: '☁️ الاستضافة', callback_data: 'menu:host' },
+      { text: '🤖 فادي AI', callback_data: 'menu:ai' },
+    ],
+    [
+      { text: '💰 الاقتصاد', callback_data: 'menu:economy' },
+      { text: '🔍 البحث', callback_data: 'menu:search' },
+    ],
+    [
+      { text: '📥 تنزيل ميديا', callback_data: 'menu:media' },
+      { text: '🎮 الترفيه', callback_data: 'menu:fun' },
+    ],
+    [
+      { text: '📋 كل الأوامر', callback_data: 'menu:help' },
+      { text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
+    ],
+  ];
+  if (!inGroup) rows.push([{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
+  return rows;
+}
+
+function helpCategoriesKeyboard(): any[][] {
+  return [
+    [{ text: '☁️ استضافة', callback_data: 'help:host' }, { text: '🤖 ذكاء', callback_data: 'help:ai' }],
+    [{ text: '👑 إدارة', callback_data: 'help:admin' }, { text: '🛡️ حماية', callback_data: 'help:protect' }],
+    [{ text: '💰 اقتصاد', callback_data: 'help:economy' }, { text: '🔍 بحث', callback_data: 'help:search' }],
+    [{ text: '📥 ميديا', callback_data: 'help:media' }, { text: '🎮 ترفيه', callback_data: 'help:fun' }],
+    [{ text: '📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
+  ];
+}
+
+function helpMenuText(cat: string): string {
+  const sections: Record<string, string> = {
+    host:
+`☁️ <b>منصة الاستضافة</b>\n━━━━━━━━━━━━━━\nشغّل وعدّل مشاريعك Python / JS / TS / Bash مع تخزين دائم.\n\n• <code>/host new &lt;الاسم&gt; &lt;اللغة&gt;</code> — أنشئ مشروع جديد\n• <code>/host upload &lt;الاسم&gt;</code> — ردّ على ملف لإضافته\n• <code>/host list</code> — كل مشاريعك\n• <code>/host code &lt;الاسم&gt;</code> — عرض الملفات\n• <code>/host run &lt;الاسم&gt;</code> — تشغيل المشروع\n• <code>/host logs &lt;الاسم&gt;</code> — آخر مخرج\n• <code>/host delete &lt;الاسم&gt;</code> — حذف\n\n⚡ كمان: <code>/run python كود</code> للتشغيل السريع.`,
+    ai:
+`🤖 <b>فادي — الوكيل الذكي</b>\n━━━━━━━━━━━━━━\nنادي عليه بكلمة <b>فادي</b> داخل أي رسالة. يفهم الصور، النصوص، والأوامر الإدارية بلغة طبيعية.\n\nأمثلة:\n• "فادي اكتم اللي رد دي ساعة"\n• "فادي حلل الصورة دي"\n• "فادي لخصلي آخر 10 رسائل"`,
+    admin:
+`👑 <b>أوامر الإدارة</b>\n━━━━━━━━━━━━━━\n/ban /unban /kick /mute /unmute\n/warn /unwarn /promote /demote\n/pin /unpin /report\n/tagall /all`,
+    protect:
+`🛡️ <b>الحماية</b>\n━━━━━━━━━━━━━━\n/lock /unlock /antispam /antiflood\n/nightmode /captcha /toxicity\n/slowmode /blacklist /restrict_new\n/security — عرض حالة الحماية الكاملة`,
+    economy:
+`💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
+    search:
+`🔍 <b>البحث</b>\n━━━━━━━━━━━━━━\n/searchbook — كتب\n/searchyt — يوتيوب\n/searchweb — ويب عام`,
+    media:
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt;\n\nمدعوم: TikTok • YouTube • Instagram • X\nيستخرج تلقائياً بأعلى جودة متاحة.`,
+    fun:
+`🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
+    all:
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\nاضغط أي قسم تحت لتفاصيله 👇\n\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🎮 ترفيه\n\n💡 كمان عندك:\n/menu — القائمة الرئيسية\n/dev — التواصل مع المطور`,
+  };
+  return sections[cat] || sections.all;
+}
+
 // ==================== VIDEO DOWNLOADER ====================
 
 async function tryCobalt(url: string): Promise<string | null> {
