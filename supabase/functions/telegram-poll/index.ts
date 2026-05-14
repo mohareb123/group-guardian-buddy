@@ -186,6 +186,65 @@ async function executeCode(lang: string, code: string): Promise<string> {
   }
 }
 
+// ==================== HOSTED PROJECTS (multi-file Piston runtime) ====================
+
+type HostedFile = { name: string; content: string };
+
+async function runHostedProject(project: any): Promise<{ ok: boolean; output: string; exitCode: number; durationMs: number; stdout: string; stderr: string }> {
+  const cfg = PISTON_LANGS[(project.language || 'python').toLowerCase()];
+  if (!cfg) return { ok: false, output: '❌ لغة المشروع غير مدعومة', exitCode: -1, durationMs: 0, stdout: '', stderr: 'unsupported language' };
+  const files: HostedFile[] = Array.isArray(project.files) && project.files.length > 0
+    ? project.files
+    : [{ name: cfg.language === 'python' ? 'main.py' : cfg.language === 'javascript' ? 'main.js' : 'main.txt', content: '' }];
+  const t0 = Date.now();
+  try {
+    const result = await withRetry(async () => {
+      const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: cfg.language, version: cfg.version,
+          files: files.map(f => ({ name: f.name, content: f.content })),
+          stdin: project.stdin || '',
+          compile_timeout: 10000, run_timeout: 10000,
+        }),
+      });
+      if (!res.ok) throw new Error(`piston ${res.status}`);
+      return await res.json();
+    }, 2, 1500);
+    const run = result.run || {}; const compile = result.compile || {};
+    const stdout = (run.stdout || '').toString();
+    const stderr = ((compile.stderr || '') + (run.stderr || '')).toString();
+    const exitCode = typeof run.code === 'number' ? run.code : -1;
+    const durationMs = Date.now() - t0;
+    const combined = (stdout + (stderr ? '\n--- STDERR ---\n' + stderr : '')).trim() || '(لا يوجد مخرج)';
+    return { ok: exitCode === 0, output: combined, exitCode, durationMs, stdout, stderr };
+  } catch (e: any) {
+    return { ok: false, output: humanError('تشغيل المشروع', e), exitCode: -1, durationMs: Date.now() - t0, stdout: '', stderr: String(e?.message || e) };
+  }
+}
+
+async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise<string | null> {
+  try {
+    const info = await tgCall('getFile', { file_id: fileId });
+    const filePath = info?.result?.file_path; if (!filePath) return null;
+    const res = await fetch(`${GATEWAY_URL}/file/${filePath}`, { headers: { 'Authorization': `Bearer ${LOVABLE_API_KEY}`, 'X-Connection-Api-Key': TELEGRAM_API_KEY } });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength > maxBytes) return null;
+    return new TextDecoder('utf-8').decode(buf);
+  } catch { return null; }
+}
+
+function inferLangFromFilename(name: string): string {
+  const n = name.toLowerCase();
+  if (n.endsWith('.py')) return 'python';
+  if (n.endsWith('.js') || n.endsWith('.mjs')) return 'javascript';
+  if (n.endsWith('.ts')) return 'typescript';
+  if (n.endsWith('.sh') || n.endsWith('.bash')) return 'bash';
+  return 'python';
+}
+
 // ==================== VIDEO DOWNLOADER ====================
 
 async function tryCobalt(url: string): Promise<string | null> {
