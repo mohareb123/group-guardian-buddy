@@ -228,7 +228,7 @@ async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise
   try {
     const info = await tgCall('getFile', { file_id: fileId });
     const filePath = info?.result?.file_path; if (!filePath) return null;
-    const res = await fetch(`${GATEWAY_URL}/file/${filePath}`, { headers: { 'Authorization': `Bearer ${LOVABLE_API_KEY}`, 'X-Connection-Api-Key': TELEGRAM_API_KEY } });
+    const res = await fetch(`${GATEWAY_URL}/file/${filePath}`, { headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'X-Connection-Api-Key': getEnv('TELEGRAM_API_KEY') } });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     if (buf.byteLength > maxBytes) return null;
