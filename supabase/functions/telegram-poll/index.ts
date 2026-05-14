@@ -1151,6 +1151,110 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
+    // ==================== HOSTED PROJECTS ====================
+    case '/host': case '/استضافة': case '/project': {
+      const sub = (args[0] || '').toLowerCase();
+      const HOST_HELP = `☁️ <b>منصة الاستضافة</b>\n━━━━━━━━━━━━━━\n<code>/host new &lt;الاسم&gt; &lt;لغة&gt;</code>\n<code>/host upload &lt;الاسم&gt;</code>  (ردّ على ملف)\n<code>/host list</code>\n<code>/host code &lt;الاسم&gt;</code>\n<code>/host run &lt;الاسم&gt;</code>\n<code>/host logs &lt;الاسم&gt;</code>\n<code>/host delete &lt;الاسم&gt;</code>\n\nاللغات: python, javascript, typescript, bash`;
+      if (!sub) { await sendMsg(chatId, HOST_HELP); break; }
+
+      if (sub === 'new' || sub === 'create') {
+        const name = (args[1] || '').trim();
+        const lang = (args[2] || 'python').toLowerCase();
+        if (!name) { await sendMsg(chatId, '❌ حدّد اسم المشروع: <code>/host new myapp python</code>'); break; }
+        if (!PISTON_LANGS[lang]) { await sendMsg(chatId, '❌ لغة غير مدعومة. اختر: python / javascript / typescript / bash'); break; }
+        const main = lang === 'python' ? 'main.py' : lang === 'javascript' ? 'main.js' : lang === 'typescript' ? 'main.ts' : 'main.sh';
+        const seed = lang === 'python' ? 'print("Hello from your hosted project!")' : lang === 'bash' ? 'echo "Hello"' : 'console.log("Hello from your hosted project!")';
+        const { error } = await supabase.from('hosted_projects').insert({
+          owner_id: userId, owner_username: msg.from.username || null, chat_id: chatId,
+          name, language: lang, files: [{ name: main, content: seed }], status: 'idle',
+        });
+        if (error) { await sendMsg(chatId, error.message.includes('unique') ? '❌ عندك مشروع بنفس الاسم بالفعل' : `❌ ${escapeHtml(error.message)}`); break; }
+        await sendMsg(chatId, `✅ <b>تم إنشاء المشروع</b>\n📦 <code>${escapeHtml(name)}</code>\n🔤 ${lang}\n📄 ${main}\n\n▶️ شغّله: <code>/host run ${escapeHtml(name)}</code>\n📤 ضيف ملفات: ردّ على ملف بـ <code>/host upload ${escapeHtml(name)}</code>`, {
+          inline_keyboard: [[{ text: '▶️ شغّل', callback_data: `host:run:${name}` }, { text: '📄 الكود', callback_data: `host:code:${name}` }]],
+        });
+        break;
+      }
+
+      if (sub === 'list' || sub === 'ls') {
+        const { data: projects } = await supabase.from('hosted_projects').select('name, language, status, run_count, last_run_at, last_exit_code').eq('owner_id', userId).order('updated_at', { ascending: false }).limit(20);
+        if (!projects || projects.length === 0) { await sendMsg(chatId, '📭 معندكش مشاريع. ابدأ بـ <code>/host new myapp python</code>'); break; }
+        const lines = projects.map((p: any, i: number) => {
+          const icon = p.last_exit_code === 0 ? '🟢' : p.last_exit_code == null ? '⚪' : '🔴';
+          return `${i+1}. ${icon} <b>${escapeHtml(p.name)}</b> · ${p.language} · شغّل ${p.run_count} مرة`;
+        }).join('\n');
+        await sendMsg(chatId, `☁️ <b>مشاريعك (${projects.length})</b>\n━━━━━━━━━━━━\n${lines}`);
+        break;
+      }
+
+      const projName = (args[1] || '').trim();
+      if (!projName) { await sendMsg(chatId, HOST_HELP); break; }
+      const { data: project } = await supabase.from('hosted_projects').select('*').eq('owner_id', userId).eq('name', projName).single();
+      if (!project) { await sendMsg(chatId, `❌ مفيش مشروع باسم <code>${escapeHtml(projName)}</code>`); break; }
+
+      if (sub === 'run' || sub === 'start') {
+        await sendMsg(chatId, `⚙️ بشغّل <b>${escapeHtml(projName)}</b>...`);
+        await supabase.from('hosted_projects').update({ status: 'running' }).eq('id', project.id);
+        const res = await runHostedProject(project);
+        await supabase.from('hosted_projects').update({
+          status: 'idle', run_count: (project.run_count || 0) + 1,
+          last_run_at: new Date().toISOString(), last_output: res.output.slice(0, 4000),
+          last_exit_code: res.exitCode, last_duration_ms: res.durationMs,
+        }).eq('id', project.id);
+        await supabase.from('hosting_runs').insert({
+          project_id: project.id, owner_id: userId, status: res.ok ? 'success' : 'failed',
+          exit_code: res.exitCode, duration_ms: res.durationMs,
+          stdout: res.stdout.slice(0, 4000), stderr: res.stderr.slice(0, 4000),
+        });
+        const status = res.ok ? '✅' : `⚠️ exit=${res.exitCode}`;
+        const out = res.output.length > 3500 ? res.output.slice(0, 3500) + '\n...[مقطوع]' : res.output;
+        await sendMsg(chatId, `${status} <b>${escapeHtml(projName)}</b> · ${res.durationMs}ms\n<pre>${escapeHtml(out)}</pre>`, {
+          inline_keyboard: [[{ text: '🔄 شغّل تاني', callback_data: `host:run:${projName}` }, { text: '📄 الكود', callback_data: `host:code:${projName}` }]],
+        });
+        break;
+      }
+
+      if (sub === 'code' || sub === 'view') {
+        const files = Array.isArray(project.files) ? project.files : [];
+        if (files.length === 0) { await sendMsg(chatId, '📭 المشروع فاضي. ضيف ملف بـ /host upload'); break; }
+        for (const f of files.slice(0, 5)) {
+          const content = (f.content || '').slice(0, 3500);
+          await sendMsg(chatId, `📄 <b>${escapeHtml(f.name)}</b>\n<pre>${escapeHtml(content)}</pre>`);
+        }
+        break;
+      }
+
+      if (sub === 'logs' || sub === 'log') {
+        const out = project.last_output || '(لم يتم تشغيل المشروع بعد)';
+        const status = project.last_exit_code === 0 ? '✅' : project.last_exit_code == null ? '⚪' : `⚠️ exit=${project.last_exit_code}`;
+        await sendMsg(chatId, `📜 <b>${escapeHtml(projName)}</b> · ${status} · ${project.last_duration_ms || 0}ms\n<pre>${escapeHtml(out.slice(0, 3500))}</pre>`);
+        break;
+      }
+
+      if (sub === 'delete' || sub === 'rm' || sub === 'del') {
+        await supabase.from('hosted_projects').delete().eq('id', project.id);
+        await sendMsg(chatId, `🗑️ تم حذف <b>${escapeHtml(projName)}</b>`);
+        break;
+      }
+
+      if (sub === 'upload' || sub === 'add') {
+        const doc = replyMsg?.document;
+        if (!doc) { await sendMsg(chatId, '📤 ردّ على رسالة فيها ملف ثم نفّذ <code>/host upload &lt;الاسم&gt;</code>'); break; }
+        if (doc.file_size > 64 * 1024) { await sendMsg(chatId, '❌ الملف كبير (الحد الأقصى 64KB)'); break; }
+        const content = await downloadTgFileText(doc.file_id);
+        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل محتوى الملف (لازم يكون نصي)'); break; }
+        const fname = doc.file_name || `file_${Date.now()}.txt`;
+        const files = Array.isArray(project.files) ? [...project.files] : [];
+        const idx = files.findIndex((f: any) => f.name === fname);
+        if (idx >= 0) files[idx] = { name: fname, content }; else files.push({ name: fname, content });
+        await supabase.from('hosted_projects').update({ files }).eq('id', project.id);
+        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف) للمشروع <b>${escapeHtml(projName)}</b>`);
+        break;
+      }
+
+      await sendMsg(chatId, HOST_HELP);
+      break;
+    }
+
     // ==================== VIDEO DOWNLOAD ====================
     case '/download': case '/dl': case '/تنزيل': {
       const url = (args[0] || replyMsg?.text || '').trim();
