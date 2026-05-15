@@ -2044,9 +2044,38 @@ async function checkScheduledMessages(supabase: any) {
 const MAX_RUNTIME_MS = 55_000;
 const MIN_REMAINING_MS = 5_000;
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
   const startTime = Date.now();
 
+  // ===== WEBHOOK MODE: Telegram POSTs an update directly =====
+  let webhookUpdate: any = null;
+  if (req.method === 'POST') {
+    try {
+      const body = await req.json();
+      if (body && typeof body.update_id === 'number') webhookUpdate = body;
+    } catch { /* not JSON, fall through to cron */ }
+  }
+
+  if (webhookUpdate) {
+    try {
+      const supabase = getSupabase();
+      if (webhookUpdate.message) {
+        const m = webhookUpdate.message;
+        await supabase.from('telegram_messages').upsert({
+          update_id: webhookUpdate.update_id, chat_id: m.chat.id, user_id: m.from?.id || null,
+          username: m.from?.username || null, text: m.text ?? null, raw_update: webhookUpdate,
+        }, { onConflict: 'update_id' });
+        await handleCommand(supabase, webhookUpdate);
+      }
+      if (webhookUpdate.callback_query) await handleCallback(supabase, webhookUpdate.callback_query);
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders });
+    } catch (e: any) {
+      try { await logSystem('error', 'webhook_handler_failed', e?.message || String(e), { update_id: webhookUpdate.update_id }); } catch {}
+      return new Response(JSON.stringify({ ok: true, error: e?.message }), { headers: corsHeaders }); // ALWAYS return 200 to Telegram
+    }
+  }
+
+  // ===== CRON MODE: scheduled tasks + fallback polling =====
   try {
     const supabase = getSupabase();
     let totalProcessed = 0;
@@ -2054,8 +2083,12 @@ Deno.serve(async () => {
     await checkScheduledMessages(supabase);
     await checkCaptchaTimeouts(supabase);
 
-    const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset').eq('id', 1).single();
+    // Skip getUpdates if webhook is registered (saves time)
+    const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset, webhook_active').eq('id', 1).single();
     if (stateErr) return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
+    if ((state as any).webhook_active) {
+      return new Response(JSON.stringify({ ok: true, mode: 'webhook', cron_only: true }), { headers: corsHeaders });
+    }
 
     let currentOffset = state.update_offset;
 
