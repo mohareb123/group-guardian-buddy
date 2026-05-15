@@ -224,7 +224,16 @@ async function runHostedProject(project: any): Promise<{ ok: boolean; output: st
   }
 }
 
-async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise<string | null> {
+// Allowed extensions for hosting uploads (security: blocks executables, archives, encrypted files)
+const ALLOWED_HOST_EXTENSIONS = ['.py', '.js', '.mjs', '.ts', '.sh', '.bash', '.txt', '.json', '.md', '.yml', '.yaml', '.toml', '.env', '.html', '.css', '.csv', '.xml'];
+const HOST_MAX_FILE_BYTES = 512 * 1024; // 512KB per file
+
+function isAllowedHostFile(name: string): boolean {
+  const lower = (name || '').toLowerCase();
+  return ALLOWED_HOST_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+async function downloadTgFileText(fileId: string, maxBytes = HOST_MAX_FILE_BYTES): Promise<string | null> {
   try {
     const info = await tgCall('getFile', { file_id: fileId });
     const filePath = info?.result?.file_path; if (!filePath) return null;
@@ -232,6 +241,11 @@ async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     if (buf.byteLength > maxBytes) return null;
+    // Reject binary files (executables, archives) by checking magic bytes
+    const head = new Uint8Array(buf.slice(0, 4));
+    if (head[0] === 0x4d && head[1] === 0x5a) return null; // MZ (Windows exe)
+    if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) return null; // ELF
+    if (head[0] === 0x50 && head[1] === 0x4b) return null; // ZIP/JAR/RAR
     return new TextDecoder('utf-8').decode(buf);
   } catch { return null; }
 }
