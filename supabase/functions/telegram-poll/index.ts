@@ -526,6 +526,13 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
   const { data: groupMembers } = await supabase.from('telegram_users').select('first_name, username, user_id, points, coins').eq('chat_id', chatId).limit(30);
   const { data: groupInfo } = await supabase.from('telegram_groups').select('title').eq('chat_id', chatId).single();
 
+  // Conversation memory: last 6 messages for context
+  const { data: recentMsgs } = await supabase.from('telegram_messages')
+    .select('user_id, username, text').eq('chat_id', chatId)
+    .not('text', 'is', null).order('created_at', { ascending: false }).limit(6);
+  const conversationContext = (recentMsgs || []).reverse()
+    .map((m: any) => `${m.username || m.user_id}: ${(m.text || '').slice(0, 150)}`).join('\n');
+
   let imageUrl: string | undefined;
   if (photo && photo.length > 0) {
     try {
@@ -543,6 +550,9 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
 المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
 المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء مسجّلون: ${(groupMembers || []).length}
 ${replyMsg ? `يردّ على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${(replyMsg.text || '(وسائط)').slice(0, 200)}"` : ''}
+
+آخر رسائل في المحادثة (للسياق):
+${conversationContext || '(لا يوجد)'}
 
 قواعد الرد:
 - نبرتك جادة، ودودة، مهنية، مختصرة (2-4 أسطر) — بدون مزاح إلا لو طُلب.
