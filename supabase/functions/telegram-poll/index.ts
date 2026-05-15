@@ -1263,15 +1263,18 @@ async function handleCommand(supabase: any, update: any) {
       if (sub === 'upload' || sub === 'add') {
         const doc = replyMsg?.document;
         if (!doc) { await sendMsg(chatId, '📤 ردّ على رسالة فيها ملف ثم نفّذ <code>/host upload &lt;الاسم&gt;</code>'); break; }
-        if (doc.file_size > 64 * 1024) { await sendMsg(chatId, '❌ الملف كبير (الحد الأقصى 64KB)'); break; }
+        if (!isAllowedHostFile(doc.file_name || '')) { await sendMsg(chatId, `❌ نوع الملف غير مسموح. المسموح: ${ALLOWED_HOST_EXTENSIONS.join(', ')}`); break; }
+        if (doc.file_size > HOST_MAX_FILE_BYTES) { await sendMsg(chatId, `❌ الملف كبير جداً (الحد ${Math.floor(HOST_MAX_FILE_BYTES/1024)}KB)`); break; }
         const content = await downloadTgFileText(doc.file_id);
-        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل محتوى الملف (لازم يكون نصي)'); break; }
+        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل الملف. تأكد إنه نصي وأقل من 512KB وغير مشفّر/تنفيذي.'); break; }
         const fname = doc.file_name || `file_${Date.now()}.txt`;
         const files = Array.isArray(project.files) ? [...project.files] : [];
+        // Cap total project files to 20 to prevent abuse
+        if (files.length >= 20 && !files.find((f: any) => f.name === fname)) { await sendMsg(chatId, '❌ وصلت للحد الأقصى (20 ملف للمشروع الواحد)'); break; }
         const idx = files.findIndex((f: any) => f.name === fname);
         if (idx >= 0) files[idx] = { name: fname, content }; else files.push({ name: fname, content });
         await supabase.from('hosted_projects').update({ files }).eq('id', project.id);
-        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف) للمشروع <b>${escapeHtml(projName)}</b>`);
+        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف · ${files.length}/20 ملف) للمشروع <b>${escapeHtml(projName)}</b>`);
         break;
       }
 
