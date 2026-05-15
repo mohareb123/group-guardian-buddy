@@ -250,37 +250,37 @@ function inferLangFromFilename(name: string): string {
 function mainMenuKeyboard(botUsername: string, inGroup = false): any[][] {
   const rows: any[][] = [
     [
-      { text: '🛡️ الحماية', callback_data: 'menu:protect' },
-      { text: '👑 الإدارة', callback_data: 'menu:admin' },
+      { text: '🔴 🛡️ الحماية', callback_data: 'menu:protect' },
+      { text: '🟡 👑 الإدارة', callback_data: 'menu:admin' },
     ],
     [
-      { text: '☁️ الاستضافة', callback_data: 'menu:host' },
-      { text: '🤖 فادي AI', callback_data: 'menu:ai' },
+      { text: '🔵 ☁️ الاستضافة', callback_data: 'menu:host' },
+      { text: '🟣 🤖 فادي AI', callback_data: 'menu:ai' },
     ],
     [
-      { text: '💰 الاقتصاد', callback_data: 'menu:economy' },
-      { text: '🔍 البحث', callback_data: 'menu:search' },
+      { text: '🟢 💰 الاقتصاد', callback_data: 'menu:economy' },
+      { text: '🟠 🔍 البحث', callback_data: 'menu:search' },
     ],
     [
-      { text: '📥 تنزيل ميديا', callback_data: 'menu:media' },
-      { text: '🎮 الترفيه', callback_data: 'menu:fun' },
+      { text: '⚪ 📥 تنزيل ميديا', callback_data: 'menu:media' },
+      { text: '🟤 🎮 الترفيه', callback_data: 'menu:fun' },
     ],
     [
-      { text: '📋 كل الأوامر', callback_data: 'menu:help' },
-      { text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
+      { text: '⚫ 📋 كل الأوامر', callback_data: 'menu:help' },
+      { text: '💎 👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
     ],
   ];
-  if (!inGroup) rows.push([{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
+  if (!inGroup) rows.push([{ text: '✨ ➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
   return rows;
 }
 
 function helpCategoriesKeyboard(): any[][] {
   return [
-    [{ text: '☁️ استضافة', callback_data: 'help:host' }, { text: '🤖 ذكاء', callback_data: 'help:ai' }],
-    [{ text: '👑 إدارة', callback_data: 'help:admin' }, { text: '🛡️ حماية', callback_data: 'help:protect' }],
-    [{ text: '💰 اقتصاد', callback_data: 'help:economy' }, { text: '🔍 بحث', callback_data: 'help:search' }],
-    [{ text: '📥 ميديا', callback_data: 'help:media' }, { text: '🎮 ترفيه', callback_data: 'help:fun' }],
-    [{ text: '📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
+    [{ text: '🔵 ☁️ استضافة', callback_data: 'help:host' }, { text: '🟣 🤖 ذكاء', callback_data: 'help:ai' }],
+    [{ text: '🟡 👑 إدارة', callback_data: 'help:admin' }, { text: '🔴 🛡️ حماية', callback_data: 'help:protect' }],
+    [{ text: '🟢 💰 اقتصاد', callback_data: 'help:economy' }, { text: '🟠 🔍 بحث', callback_data: 'help:search' }],
+    [{ text: '⚪ 📥 ميديا', callback_data: 'help:media' }, { text: '🟤 🎮 ترفيه', callback_data: 'help:fun' }],
+    [{ text: '⚫ 📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
   ];
 }
 
