@@ -224,7 +224,16 @@ async function runHostedProject(project: any): Promise<{ ok: boolean; output: st
   }
 }
 
-async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise<string | null> {
+// Allowed extensions for hosting uploads (security: blocks executables, archives, encrypted files)
+const ALLOWED_HOST_EXTENSIONS = ['.py', '.js', '.mjs', '.ts', '.sh', '.bash', '.txt', '.json', '.md', '.yml', '.yaml', '.toml', '.env', '.html', '.css', '.csv', '.xml'];
+const HOST_MAX_FILE_BYTES = 512 * 1024; // 512KB per file
+
+function isAllowedHostFile(name: string): boolean {
+  const lower = (name || '').toLowerCase();
+  return ALLOWED_HOST_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+async function downloadTgFileText(fileId: string, maxBytes = HOST_MAX_FILE_BYTES): Promise<string | null> {
   try {
     const info = await tgCall('getFile', { file_id: fileId });
     const filePath = info?.result?.file_path; if (!filePath) return null;
@@ -232,6 +241,11 @@ async function downloadTgFileText(fileId: string, maxBytes = 64 * 1024): Promise
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     if (buf.byteLength > maxBytes) return null;
+    // Reject binary files (executables, archives) by checking magic bytes
+    const head = new Uint8Array(buf.slice(0, 4));
+    if (head[0] === 0x4d && head[1] === 0x5a) return null; // MZ (Windows exe)
+    if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) return null; // ELF
+    if (head[0] === 0x50 && head[1] === 0x4b) return null; // ZIP/JAR/RAR
     return new TextDecoder('utf-8').decode(buf);
   } catch { return null; }
 }
@@ -250,37 +264,37 @@ function inferLangFromFilename(name: string): string {
 function mainMenuKeyboard(botUsername: string, inGroup = false): any[][] {
   const rows: any[][] = [
     [
-      { text: '🛡️ الحماية', callback_data: 'menu:protect' },
-      { text: '👑 الإدارة', callback_data: 'menu:admin' },
+      { text: '🔴 🛡️ الحماية', callback_data: 'menu:protect' },
+      { text: '🟡 👑 الإدارة', callback_data: 'menu:admin' },
     ],
     [
-      { text: '☁️ الاستضافة', callback_data: 'menu:host' },
-      { text: '🤖 فادي AI', callback_data: 'menu:ai' },
+      { text: '🔵 ☁️ الاستضافة', callback_data: 'menu:host' },
+      { text: '🟣 🤖 فادي AI', callback_data: 'menu:ai' },
     ],
     [
-      { text: '💰 الاقتصاد', callback_data: 'menu:economy' },
-      { text: '🔍 البحث', callback_data: 'menu:search' },
+      { text: '🟢 💰 الاقتصاد', callback_data: 'menu:economy' },
+      { text: '🟠 🔍 البحث', callback_data: 'menu:search' },
     ],
     [
-      { text: '📥 تنزيل ميديا', callback_data: 'menu:media' },
-      { text: '🎮 الترفيه', callback_data: 'menu:fun' },
+      { text: '⚪ 📥 تنزيل ميديا', callback_data: 'menu:media' },
+      { text: '🟤 🎮 الترفيه', callback_data: 'menu:fun' },
     ],
     [
-      { text: '📋 كل الأوامر', callback_data: 'menu:help' },
-      { text: '👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
+      { text: '⚫ 📋 كل الأوامر', callback_data: 'menu:help' },
+      { text: '💎 👨‍💻 المطور', url: `tg://user?id=${DEVELOPER_ID}` },
     ],
   ];
-  if (!inGroup) rows.push([{ text: '➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
+  if (!inGroup) rows.push([{ text: '✨ ➕ أضفني لمجموعتك', url: `https://t.me/${botUsername}?startgroup=true` }]);
   return rows;
 }
 
 function helpCategoriesKeyboard(): any[][] {
   return [
-    [{ text: '☁️ استضافة', callback_data: 'help:host' }, { text: '🤖 ذكاء', callback_data: 'help:ai' }],
-    [{ text: '👑 إدارة', callback_data: 'help:admin' }, { text: '🛡️ حماية', callback_data: 'help:protect' }],
-    [{ text: '💰 اقتصاد', callback_data: 'help:economy' }, { text: '🔍 بحث', callback_data: 'help:search' }],
-    [{ text: '📥 ميديا', callback_data: 'help:media' }, { text: '🎮 ترفيه', callback_data: 'help:fun' }],
-    [{ text: '📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
+    [{ text: '🔵 ☁️ استضافة', callback_data: 'help:host' }, { text: '🟣 🤖 ذكاء', callback_data: 'help:ai' }],
+    [{ text: '🟡 👑 إدارة', callback_data: 'help:admin' }, { text: '🔴 🛡️ حماية', callback_data: 'help:protect' }],
+    [{ text: '🟢 💰 اقتصاد', callback_data: 'help:economy' }, { text: '🟠 🔍 بحث', callback_data: 'help:search' }],
+    [{ text: '⚪ 📥 ميديا', callback_data: 'help:media' }, { text: '🟤 🎮 ترفيه', callback_data: 'help:fun' }],
+    [{ text: '⚫ 📋 الكل', callback_data: 'help:all' }, { text: '🏠 القائمة الرئيسية', callback_data: 'menu:main' }],
   ];
 }
 
@@ -526,6 +540,13 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
   const { data: groupMembers } = await supabase.from('telegram_users').select('first_name, username, user_id, points, coins').eq('chat_id', chatId).limit(30);
   const { data: groupInfo } = await supabase.from('telegram_groups').select('title').eq('chat_id', chatId).single();
 
+  // Conversation memory: last 6 messages for context
+  const { data: recentMsgs } = await supabase.from('telegram_messages')
+    .select('user_id, username, text').eq('chat_id', chatId)
+    .not('text', 'is', null).order('created_at', { ascending: false }).limit(6);
+  const conversationContext = (recentMsgs || []).reverse()
+    .map((m: any) => `${m.username || m.user_id}: ${(m.text || '').slice(0, 150)}`).join('\n');
+
   let imageUrl: string | undefined;
   if (photo && photo.length > 0) {
     try {
@@ -543,6 +564,9 @@ async function handleAI(supabase: any, chatId: number, userId: number, username:
 المستخدم: ${username} (ID:${userId}) | مشرف: ${isUserAdmin ? 'نعم' : 'لا'} | المطور: ${isOwner ? 'نعم' : 'لا'}
 المجموعة: ${groupInfo?.title || 'مجموعة'} | أعضاء مسجّلون: ${(groupMembers || []).length}
 ${replyMsg ? `يردّ على: ${replyMsg.from?.first_name || 'مجهول'} (ID:${replyMsg.from?.id}) - "${(replyMsg.text || '(وسائط)').slice(0, 200)}"` : ''}
+
+آخر رسائل في المحادثة (للسياق):
+${conversationContext || '(لا يوجد)'}
 
 قواعد الرد:
 - نبرتك جادة، ودودة، مهنية، مختصرة (2-4 أسطر) — بدون مزاح إلا لو طُلب.
@@ -1239,15 +1263,18 @@ async function handleCommand(supabase: any, update: any) {
       if (sub === 'upload' || sub === 'add') {
         const doc = replyMsg?.document;
         if (!doc) { await sendMsg(chatId, '📤 ردّ على رسالة فيها ملف ثم نفّذ <code>/host upload &lt;الاسم&gt;</code>'); break; }
-        if (doc.file_size > 64 * 1024) { await sendMsg(chatId, '❌ الملف كبير (الحد الأقصى 64KB)'); break; }
+        if (!isAllowedHostFile(doc.file_name || '')) { await sendMsg(chatId, `❌ نوع الملف غير مسموح. المسموح: ${ALLOWED_HOST_EXTENSIONS.join(', ')}`); break; }
+        if (doc.file_size > HOST_MAX_FILE_BYTES) { await sendMsg(chatId, `❌ الملف كبير جداً (الحد ${Math.floor(HOST_MAX_FILE_BYTES/1024)}KB)`); break; }
         const content = await downloadTgFileText(doc.file_id);
-        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل محتوى الملف (لازم يكون نصي)'); break; }
+        if (content == null) { await sendMsg(chatId, '❌ مقدرتش أحمّل الملف. تأكد إنه نصي وأقل من 512KB وغير مشفّر/تنفيذي.'); break; }
         const fname = doc.file_name || `file_${Date.now()}.txt`;
         const files = Array.isArray(project.files) ? [...project.files] : [];
+        // Cap total project files to 20 to prevent abuse
+        if (files.length >= 20 && !files.find((f: any) => f.name === fname)) { await sendMsg(chatId, '❌ وصلت للحد الأقصى (20 ملف للمشروع الواحد)'); break; }
         const idx = files.findIndex((f: any) => f.name === fname);
         if (idx >= 0) files[idx] = { name: fname, content }; else files.push({ name: fname, content });
         await supabase.from('hosted_projects').update({ files }).eq('id', project.id);
-        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف) للمشروع <b>${escapeHtml(projName)}</b>`);
+        await sendMsg(chatId, `✅ تم إضافة <code>${escapeHtml(fname)}</code> (${content.length} حرف · ${files.length}/20 ملف) للمشروع <b>${escapeHtml(projName)}</b>`);
         break;
       }
 
@@ -2044,9 +2071,38 @@ async function checkScheduledMessages(supabase: any) {
 const MAX_RUNTIME_MS = 55_000;
 const MIN_REMAINING_MS = 5_000;
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
   const startTime = Date.now();
 
+  // ===== WEBHOOK MODE: Telegram POSTs an update directly =====
+  let webhookUpdate: any = null;
+  if (req.method === 'POST') {
+    try {
+      const body = await req.json();
+      if (body && typeof body.update_id === 'number') webhookUpdate = body;
+    } catch { /* not JSON, fall through to cron */ }
+  }
+
+  if (webhookUpdate) {
+    try {
+      const supabase = getSupabase();
+      if (webhookUpdate.message) {
+        const m = webhookUpdate.message;
+        await supabase.from('telegram_messages').upsert({
+          update_id: webhookUpdate.update_id, chat_id: m.chat.id, user_id: m.from?.id || null,
+          username: m.from?.username || null, text: m.text ?? null, raw_update: webhookUpdate,
+        }, { onConflict: 'update_id' });
+        await handleCommand(supabase, webhookUpdate);
+      }
+      if (webhookUpdate.callback_query) await handleCallback(supabase, webhookUpdate.callback_query);
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders });
+    } catch (e: any) {
+      try { await logSystem('error', 'webhook_handler_failed', e?.message || String(e), { update_id: webhookUpdate.update_id }); } catch {}
+      return new Response(JSON.stringify({ ok: true, error: e?.message }), { headers: corsHeaders }); // ALWAYS return 200 to Telegram
+    }
+  }
+
+  // ===== CRON MODE: scheduled tasks + fallback polling =====
   try {
     const supabase = getSupabase();
     let totalProcessed = 0;
@@ -2054,8 +2110,12 @@ Deno.serve(async () => {
     await checkScheduledMessages(supabase);
     await checkCaptchaTimeouts(supabase);
 
-    const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset').eq('id', 1).single();
+    // Skip getUpdates if webhook is registered (saves time)
+    const { data: state, error: stateErr } = await supabase.from('telegram_bot_state').select('update_offset, webhook_active').eq('id', 1).single();
     if (stateErr) return new Response(JSON.stringify({ error: stateErr.message }), { status: 500, headers: corsHeaders });
+    if ((state as any).webhook_active) {
+      return new Response(JSON.stringify({ ok: true, mode: 'webhook', cron_only: true }), { headers: corsHeaders });
+    }
 
     let currentOffset = state.update_offset;
 

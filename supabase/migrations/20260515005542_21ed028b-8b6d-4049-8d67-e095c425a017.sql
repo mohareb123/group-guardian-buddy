@@ -1,0 +1,1 @@
+ALTER TABLE public.telegram_bot_state ADD COLUMN IF NOT EXISTS webhook_active boolean NOT NULL DEFAULT false;
