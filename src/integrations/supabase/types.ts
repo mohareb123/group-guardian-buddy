@@ -192,16 +192,19 @@ export type Database = {
           id: number
           update_offset: number
           updated_at: string
+          webhook_active: boolean
         }
         Insert: {
           id: number
           update_offset?: number
           updated_at?: string
+          webhook_active?: boolean
         }
         Update: {
           id?: number
           update_offset?: number
           updated_at?: string
+          webhook_active?: boolean
         }
         Relationships: []
       }
