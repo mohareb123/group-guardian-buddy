@@ -631,6 +631,24 @@ ${conversationContext || '(لا يوجد)'}
         }
       } catch (e) { console.error('AI action error:', e); }
     }
+
+    // 🌐 Interactive browser action (screenshot / open site)
+    const browserMatch = reply.match(/\[BROWSER:(\{[\s\S]*?\})\]/);
+    if (browserMatch) {
+      cleanReply = cleanReply.replace(/\[BROWSER:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const b = JSON.parse(browserMatch[1]);
+        const opts = { fullpage: !!b.fullpage, mobile: !!b.mobile };
+        if (b.action === 'open') await openSite(chatId, b.url, opts);
+        else await sendScreenshot(chatId, b.url, opts);
+      } catch (e) {
+        console.error('AI browser action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد الموقع المطلوب. ابعت الرابط بصيغة واضحة.');
+      }
+      return;
+    }
+
     if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
   } catch (e) {
     console.error('AI error:', e);
