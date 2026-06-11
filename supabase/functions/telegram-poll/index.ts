@@ -311,7 +311,7 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
 `📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
     tools:
@@ -586,6 +586,14 @@ ${conversationContext || '(لا يوجد)'}
 أوامر إدارية بلغة طبيعية (احظر/اطرد/اكتم/حذّر/رقّي):
 - لو المستخدم مشرف أو المطور وطلب إجراء على شخص (بالرد عليه أو بذكر ID)، أضف في نهاية ردك بالضبط:
   [ACTION:{"type":"ban|kick|mute|unmute|warn|promote|demote","target_user_id":<ID>}]
+
+🌐 المتصفح التفاعلي (كروم):
+- لو المستخدم طلب يفتح/يصوّر/يشوف موقع، أو قال "صوّر/لقطة شاشة/افتح/ادخل/شوف موقع/screenshot"، استخرج اسم الموقع وحوّله لرابط كامل، ثم أضف في نهاية ردك بالضبط:
+  [BROWSER:{"action":"screenshot|open","url":"https://...","fullpage":true|false,"mobile":true|false}]
+  • استخدم "screenshot" لو طلب صورة فقط، و"open" لو عايز يتصفح/يلخّص محتوى الموقع كمان.
+  • fullpage=true لو قال "الصفحة كاملة"، mobile=true لو قال "موبايل/جوال".
+  • مثال: «فادي صوّرلي جوجل» → [BROWSER:{"action":"screenshot","url":"https://google.com","fullpage":false,"mobile":false}]
+  • مثال: «فادي افتح موقع ويكيبيديا ولخصه» → [BROWSER:{"action":"open","url":"https://wikipedia.org","fullpage":false,"mobile":false}]
 - لا تُنشئ JSON إلا للإجراءات الفعلية.`;
 
   try {
@@ -623,6 +631,24 @@ ${conversationContext || '(لا يوجد)'}
         }
       } catch (e) { console.error('AI action error:', e); }
     }
+
+    // 🌐 Interactive browser action (screenshot / open site)
+    const browserMatch = reply.match(/\[BROWSER:(\{[\s\S]*?\})\]/);
+    if (browserMatch) {
+      cleanReply = cleanReply.replace(/\[BROWSER:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const b = JSON.parse(browserMatch[1]);
+        const opts = { fullpage: !!b.fullpage, mobile: !!b.mobile };
+        if (b.action === 'open') await openSite(chatId, b.url, opts);
+        else await sendScreenshot(chatId, b.url, opts);
+      } catch (e) {
+        console.error('AI browser action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد الموقع المطلوب. ابعت الرابط بصيغة واضحة.');
+      }
+      return;
+    }
+
     if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
   } catch (e) {
     console.error('AI error:', e);
@@ -870,6 +896,62 @@ async function browsePage(url: string): Promise<string> {
     console.error('Browse error:', e);
     return '❌ فشل تصفح الصفحة.';
   }
+}
+
+// ==================== INTERACTIVE CHROME BROWSER (screenshots) ====================
+
+function normalizeUrl(input: string): string {
+  let u = (input || '').trim().replace(/^[<"']|[>"']$/g, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u;
+}
+
+// Builds a real-Chrome rendered screenshot URL (thum.io renders pages with a headless Chrome).
+function buildScreenshotUrl(url: string, opts: { fullpage?: boolean; mobile?: boolean; wait?: number } = {}): string {
+  const parts: string[] = ['https://image.thum.io/get'];
+  parts.push('width', String(opts.mobile ? 430 : 1280));
+  if (opts.mobile) parts.push('viewportwidth', '430');
+  if (opts.fullpage) parts.push('fullpage');
+  parts.push('wait', String(opts.wait ?? 3));
+  parts.push('noanimate');
+  return parts.join('/') + '/' + url;
+}
+
+// Captures a website and sends the screenshot to Telegram. Returns true on success.
+async function sendScreenshot(chatId: number, rawUrl: string, opts: { fullpage?: boolean; mobile?: boolean } = {}, extraCaption = ''): Promise<boolean> {
+  const url = normalizeUrl(rawUrl);
+  if (!url || !/^https?:\/\/.+\..+/i.test(url)) {
+    await sendMsg(chatId, '🌐 ابعت رابط صحيح للموقع اللي عايز تصوّره.');
+    return false;
+  }
+  try { await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_photo' }); } catch { /* ignore */ }
+  const shot = buildScreenshotUrl(url, opts);
+  const caption = `📸 <b>لقطة شاشة</b> ${opts.mobile ? '📱 (جوال)' : '🖥️ (سطح مكتب)'}${opts.fullpage ? ' • صفحة كاملة' : ''}\n🔗 ${escapeHtml(url)}${extraCaption ? `\n${extraCaption}` : ''}`;
+  try {
+    await tgCall('sendPhoto', { chat_id: chatId, photo: shot, caption, parse_mode: 'HTML' });
+    return true;
+  } catch (e) {
+    console.error('Screenshot error:', e);
+    // Fallback: send as document (some pages exceed photo limits)
+    try {
+      await tgCall('sendDocument', { chat_id: chatId, document: shot, caption });
+      return true;
+    } catch {
+      await sendMsg(chatId, `❌ تعذّر تصوير الموقع دلوقتي. جرّب تاني أو غيّر الرابط.\n🔗 ${escapeHtml(url)}`);
+      return false;
+    }
+  }
+}
+
+// Full interactive open: screenshot + content summary + clickable links in one shot.
+async function openSite(chatId: number, rawUrl: string, opts: { fullpage?: boolean; mobile?: boolean } = {}) {
+  const url = normalizeUrl(rawUrl);
+  await sendScreenshot(chatId, url, opts);
+  try {
+    const summary = await browsePage(url);
+    await sendMsg(chatId, summary, undefined);
+  } catch { /* screenshot already sent */ }
 }
 
 // ==================== WEATHER ====================
@@ -1642,6 +1724,25 @@ async function handleCommand(supabase: any, update: any) {
       await sendMsg(chatId, '⏳ جاري تصفح الصفحة وتلخيصها...');
       const result = await browsePage(url);
       await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/screenshot': case '/shot': case '/صور': case '/شوت': case '/لقطة': {
+      const raw = (args.join(' ') || replyMsg?.text || '').trim();
+      const flags = raw.toLowerCase();
+      const mobile = /موبايل|جوال|mobile|phone/.test(flags);
+      const fullpage = /كامل|كاملة|full|fullpage/.test(flags);
+      const url = raw.replace(/موبايل|جوال|mobile|phone|كاملة|كامل|fullpage|full/gi, '').trim();
+      if (!url) { await sendMsg(chatId, '📸 ابعت رابط الموقع:\n<code>/screenshot google.com</code>\nأضف <b>موبايل</b> أو <b>كاملة</b> لو حابب.'); break; }
+      await sendScreenshot(chatId, url, { mobile, fullpage });
+      break;
+    }
+
+    case '/open': case '/افتح': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url) { await sendMsg(chatId, '🌐 ابعت رابط الموقع:\n<code>/open example.com</code>'); break; }
+      await sendMsg(chatId, '⏳ بفتح الموقع وبصوّره وبلخصه...');
+      await openSite(chatId, url, {});
       break;
     }
 
