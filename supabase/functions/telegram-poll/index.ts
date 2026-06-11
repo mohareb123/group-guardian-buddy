@@ -1575,6 +1575,126 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
+    case '/image': case '/img': case '/صورة': case '/صور': {
+      const query = args.join(' ');
+      if (!query) { await sendMsg(chatId, '🖼️ اكتب ما تريد البحث عنه:\n<code>/image ماهوراجا من جوجيتسو كايسن</code>'); break; }
+      await sendMsg(chatId, `🔍 جاري البحث عن صور "${query}"...`);
+      const images = await searchImages(query, 6);
+      if (images.length === 0) { await sendMsg(chatId, '😕 لم أجد صوراً مناسبة. جرّب كلمات أخرى.'); break; }
+      try {
+        const media = images.slice(0, 6).map((img, i) => ({
+          type: 'photo', media: img, ...(i === 0 ? { caption: `🖼️ نتائج: ${query}` } : {}),
+        }));
+        await tgCall('sendMediaGroup', { chat_id: chatId, media });
+      } catch {
+        let sent = 0;
+        for (const img of images) {
+          try { await tgCall('sendPhoto', { chat_id: chatId, photo: img }); sent++; } catch { /* skip */ }
+        }
+        if (sent === 0) await sendMsg(chatId, `😕 تعذّر إرسال الصور. الروابط:\n${images.map((u, i) => `${i + 1}. ${escapeHtml(u)}`).join('\n')}`);
+      }
+      break;
+    }
+
+    case '/searchfile': case '/file': case '/ملف': {
+      const fileTypes = ['pdf', 'zip', 'mp3', 'doc', 'docx', 'rar', 'epub', 'apk'];
+      let fileType = 'pdf';
+      let parts = [...args];
+      if (parts[0] && fileTypes.includes(parts[0].toLowerCase())) { fileType = parts.shift()!.toLowerCase(); }
+      const query = parts.join(' ');
+      if (!query) { await sendMsg(chatId, '📂 ابحث عن ملف:\n<code>/searchfile pdf Python</code>\n\nالأنواع: pdf, zip, mp3, doc, epub, apk'); break; }
+      await sendMsg(chatId, `🔍 جاري البحث عن ملفات ${fileType.toUpperCase()} عن "${query}"...`);
+      const result = await searchFiles(query, fileType);
+      await sendMsg(chatId, `📂 <b>نتائج الملفات:</b>\n\n${result}`);
+      break;
+    }
+
+    case '/get': case '/getfile': case '/جلب': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '⬇️ ابعت رابط مباشر:\n<code>/get https://example.com/file.pdf</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري جلب الملف...');
+      try {
+        const info = await fetchFileInfo(url);
+        if (info.size > 50 * 1024 * 1024) {
+          await sendMsg(chatId, `⚠️ حجم الملف كبير (${(info.size / 1048576).toFixed(1)}MB) ويتجاوز حد تيليجرام (50MB).\n🔗 الرابط المباشر:\n${escapeHtml(url)}`);
+          break;
+        }
+        const isImage = /^image\//i.test(info.contentType);
+        const isVideo = /^video\//i.test(info.contentType);
+        try {
+          if (isImage) await tgCall('sendPhoto', { chat_id: chatId, photo: url, caption: `✅ ${info.name}` });
+          else if (isVideo) await tgCall('sendVideo', { chat_id: chatId, video: url, caption: `✅ ${info.name}` });
+          else await tgCall('sendDocument', { chat_id: chatId, document: url, caption: `✅ ${info.name}` });
+        } catch {
+          await sendMsg(chatId, `✅ الرابط جاهز للتحميل:\n${escapeHtml(url)}`);
+        }
+      } catch (e) {
+        await sendMsg(chatId, humanError('جلب الملف', e));
+      }
+      break;
+    }
+
+    case '/browse': case '/تصفح': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '🌐 ابعت رابط الصفحة:\n<code>/browse https://example.com</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري تصفح الصفحة وتلخيصها...');
+      const result = await browsePage(url);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/weather': case '/طقس': case '/الطقس': {
+      const city = args.join(' ');
+      if (!city) { await sendMsg(chatId, '🌤️ اكتب اسم المدينة:\n<code>/weather القاهرة</code>'); break; }
+      const result = await getWeather(city);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/crypto': case '/coin': case '/عملة': {
+      const coin = args[0];
+      if (!coin) { await sendMsg(chatId, '💰 اكتب رمز العملة:\n<code>/crypto btc</code>\nمدعوم: btc, eth, sol, bnb, xrp ...'); break; }
+      const result = await getCrypto(coin);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/translate': case '/tr': case '/ترجم': {
+      let target = 'العربية';
+      let parts = [...args];
+      const langMap: Record<string, string> = { ar: 'العربية', en: 'الإنجليزية', fr: 'الفرنسية', es: 'الإسبانية', de: 'الألمانية', tr: 'التركية', ru: 'الروسية', it: 'الإيطالية', ja: 'اليابانية', zh: 'الصينية' };
+      if (parts[0] && langMap[parts[0].toLowerCase()]) { target = langMap[parts.shift()!.toLowerCase()]; }
+      let text = parts.join(' ') || replyMsg?.text || '';
+      if (!text) { await sendMsg(chatId, '🌍 الاستخدام:\n<code>/translate en مرحبا بالعالم</code>\nأو رد على رسالة بـ <code>/translate ar</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري الترجمة...');
+      const result = await translateText(target, text);
+      await sendMsg(chatId, `🌍 <b>الترجمة (${target}):</b>\n\n${escapeHtml(result)}`);
+      break;
+    }
+
+    case '/qr': case '/qrcode': {
+      const data = args.join(' ') || replyMsg?.text || '';
+      if (!data) { await sendMsg(chatId, '📱 اكتب النص أو الرابط:\n<code>/qr https://example.com</code>'); break; }
+      try {
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data=${encodeURIComponent(data)}`;
+        await tgCall('sendPhoto', { chat_id: chatId, photo: qrUrl, caption: `📱 QR Code:\n${data.slice(0, 200)}` });
+      } catch (e) {
+        await sendMsg(chatId, humanError('إنشاء QR', e));
+      }
+      break;
+    }
+
+    case '/rss': case '/feed': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📰 ابعت رابط RSS:\n<code>/rss https://example.com/feed.xml</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري قراءة التغذية...');
+      const result = await getRss(url);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+
+
     // ==================== ECONOMY ====================
     case '/daily': {
       const { data: user } = await supabase.from('telegram_users').select('last_daily, daily_streak, coins').eq('user_id', userId).eq('chat_id', chatId).single();
