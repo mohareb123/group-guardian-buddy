@@ -1727,7 +1727,24 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
-    case '/weather': case '/طقس': case '/الطقس': {
+    case '/screenshot': case '/shot': case '/صور': case '/شوت': case '/لقطة': {
+      const raw = (args.join(' ') || replyMsg?.text || '').trim();
+      const flags = raw.toLowerCase();
+      const mobile = /موبايل|جوال|mobile|phone/.test(flags);
+      const fullpage = /كامل|كاملة|full|fullpage/.test(flags);
+      const url = raw.replace(/موبايل|جوال|mobile|phone|كاملة|كامل|fullpage|full/gi, '').trim();
+      if (!url) { await sendMsg(chatId, '📸 ابعت رابط الموقع:\n<code>/screenshot google.com</code>\nأضف <b>موبايل</b> أو <b>كاملة</b> لو حابب.'); break; }
+      await sendScreenshot(chatId, url, { mobile, fullpage });
+      break;
+    }
+
+    case '/open': case '/افتح': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url) { await sendMsg(chatId, '🌐 ابعت رابط الموقع:\n<code>/open example.com</code>'); break; }
+      await sendMsg(chatId, '⏳ بفتح الموقع وبصوّره وبلخصه...');
+      await openSite(chatId, url, {});
+      break;
+    }
       const city = args.join(' ');
       if (!city) { await sendMsg(chatId, '🌤️ اكتب اسم المدينة:\n<code>/weather القاهرة</code>'); break; }
       const result = await getWeather(city);
