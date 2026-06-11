@@ -311,13 +311,15 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث</b>\n━━━━━━━━━━━━━━\n/searchbook — كتب\n/searchyt — يوتيوب\n/searchweb — ويب عام`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
-`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt;\n\nمدعوم: TikTok • YouTube • Instagram • X\nيستخرج تلقائياً بأعلى جودة متاحة.`,
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
+    tools:
+`🧰 <b>أدوات مفيدة</b>\n━━━━━━━━━━━━━━\n🌤️ /weather &lt;مدينة&gt; — الطقس\n💰 /crypto &lt;عملة&gt; — أسعار العملات الرقمية\n🌍 /translate &lt;لغة&gt; &lt;نص&gt; — ترجمة\n📱 /qr &lt;نص/رابط&gt; — توليد QR Code\n📰 /rss &lt;رابط&gt; — قراءة تغذية RSS`,
     fun:
 `🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
     all:
-`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\nاضغط أي قسم تحت لتفاصيله 👇\n\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🎮 ترفيه\n\n💡 كمان عندك:\n/menu — القائمة الرئيسية\n/dev — التواصل مع المطور`,
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /browse\n⬇️ <b>تنزيل:</b> /download /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
   };
   return sections[cat] || sections.all;
 }
