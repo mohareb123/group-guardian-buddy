@@ -311,13 +311,15 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث</b>\n━━━━━━━━━━━━━━\n/searchbook — كتب\n/searchyt — يوتيوب\n/searchweb — ويب عام`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
-`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt;\n\nمدعوم: TikTok • YouTube • Instagram • X\nيستخرج تلقائياً بأعلى جودة متاحة.`,
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
+    tools:
+`🧰 <b>أدوات مفيدة</b>\n━━━━━━━━━━━━━━\n🌤️ /weather &lt;مدينة&gt; — الطقس\n💰 /crypto &lt;عملة&gt; — أسعار العملات الرقمية\n🌍 /translate &lt;لغة&gt; &lt;نص&gt; — ترجمة\n📱 /qr &lt;نص/رابط&gt; — توليد QR Code\n📰 /rss &lt;رابط&gt; — قراءة تغذية RSS`,
     fun:
 `🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
     all:
-`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\nاضغط أي قسم تحت لتفاصيله 👇\n\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🎮 ترفيه\n\n💡 كمان عندك:\n/menu — القائمة الرئيسية\n/dev — التواصل مع المطور`,
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /browse\n⬇️ <b>تنزيل:</b> /download /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
   };
   return sections[cat] || sections.all;
 }
@@ -774,6 +776,187 @@ async function searchWeb(query: string): Promise<string> {
   } catch (error) {
     console.error('Web search error:', error);
     return '❌ فشل البحث. حاول لاحقاً.';
+  }
+}
+
+// ==================== IMAGE SEARCH ====================
+
+async function searchImages(query: string, limit = 6): Promise<string[]> {
+  try {
+    const tokenRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    });
+    const html = await tokenRes.text();
+    const vqdMatch = html.match(/vqd=["']?([\d-]+)["']?/);
+    if (!vqdMatch) return [];
+    const vqd = vqdMatch[1];
+    const res = await fetch(`https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,&p=1`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://duckduckgo.com/' },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.results || []).map((r: any) => r.image).filter(Boolean).slice(0, limit);
+  } catch (e) {
+    console.error('Image search error:', e);
+    return [];
+  }
+}
+
+// ==================== FILE SEARCH ====================
+
+async function searchFiles(query: string, fileType: string): Promise<string> {
+  try {
+    const results = await duckSearch(`${query} filetype:${fileType}`);
+    if (results.length === 0) return `لم يتم العثور على ملفات ${fileType.toUpperCase()}.`;
+    return results.map((item, i) => {
+      const lines = [`${i + 1}. <b>${escapeHtml(item.title)}</b>`, `📂 <a href="${escapeHtml(item.url)}">تحميل (${fileType.toUpperCase()})</a>`];
+      if (item.snippet) lines.push(`📝 ${escapeHtml(item.snippet)}`);
+      return lines.join('\n');
+    }).join('\n\n');
+  } catch (e) {
+    console.error('File search error:', e);
+    return '❌ فشل البحث عن الملفات.';
+  }
+}
+
+// ==================== DIRECT FILE DOWNLOAD ====================
+
+async function fetchFileInfo(url: string): Promise<{ size: number; name: string; contentType: string }> {
+  let size = 0;
+  let contentType = 'application/octet-stream';
+  try {
+    const head = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': 'Mozilla/5.0' } });
+    size = parseInt(head.headers.get('content-length') || '0');
+    contentType = head.headers.get('content-type') || contentType;
+  } catch { /* ignore */ }
+  let name = 'file';
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split('/').filter(Boolean).pop();
+    if (last) name = decodeURIComponent(last);
+  } catch { /* ignore */ }
+  return { size, name, contentType };
+}
+
+// ==================== INTERACTIVE BROWSE ====================
+
+async function browsePage(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept-Language': 'ar,en;q=0.9' } });
+    if (!res.ok) return `❌ تعذّر فتح الصفحة [${res.status}].`;
+    const html = await res.text();
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = cleanText(titleMatch?.[1] || url, 120);
+    let body = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ');
+    const text = decodeHtmlEntities(stripHtml(body)).replace(/\s+/g, ' ').trim().slice(0, 6000);
+    const links = [...html.matchAll(/<a[^>]+href="(https?:\/\/[^"#]+)"[^>]*>([\s\S]*?)<\/a>/gi)]
+      .map(m => ({ url: m[1], label: cleanText(m[2], 50) }))
+      .filter(l => l.label && l.label.length > 3)
+      .slice(0, 6);
+    const summary = await callAI(
+      `لخّص محتوى هذه الصفحة بالعربية في نقاط مختصرة وواضحة:\n\nالعنوان: ${title}\n\nالمحتوى:\n${text}`,
+      'أنت مساعد يلخّص صفحات الويب بدقة وإيجاز باللغة العربية.',
+    );
+    let out = `🌐 <b>${escapeHtml(title)}</b>\n🔗 ${escapeHtml(url)}\n━━━━━━━━━━━━━━\n${escapeHtml(summary)}`;
+    if (links.length) {
+      out += `\n\n🔗 <b>روابط داخل الصفحة:</b>\n${links.map((l, i) => `${i + 1}. <a href="${escapeHtml(l.url)}">${escapeHtml(l.label)}</a>`).join('\n')}`;
+    }
+    return out.length > 3900 ? `${out.slice(0, 3897)}...` : out;
+  } catch (e) {
+    console.error('Browse error:', e);
+    return '❌ فشل تصفح الصفحة.';
+  }
+}
+
+// ==================== WEATHER ====================
+
+const WEATHER_CODES: Record<number, string> = {
+  0: '☀️ صحو', 1: '🌤️ غائم جزئياً', 2: '⛅ غائم جزئياً', 3: '☁️ غائم',
+  45: '🌫️ ضباب', 48: '🌫️ ضباب', 51: '🌦️ رذاذ خفيف', 53: '🌦️ رذاذ', 55: '🌦️ رذاذ كثيف',
+  61: '🌧️ مطر خفيف', 63: '🌧️ مطر', 65: '🌧️ مطر غزير', 71: '🌨️ ثلج خفيف', 73: '🌨️ ثلج', 75: '🌨️ ثلج كثيف',
+  80: '🌦️ زخات مطر', 81: '🌧️ زخات مطر', 82: '⛈️ زخات غزيرة', 95: '⛈️ عاصفة رعدية', 96: '⛈️ عاصفة برَد', 99: '⛈️ عاصفة برَد',
+};
+
+async function getWeather(city: string): Promise<string> {
+  try {
+    const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ar`);
+    const gd = await geo.json();
+    if (!gd.results?.length) return '❌ لم أجد هذه المدينة. تأكد من الاسم.';
+    const { latitude, longitude, name, country } = gd.results[0];
+    const w = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code`);
+    const wd = await w.json();
+    const c = wd.current;
+    const desc = WEATHER_CODES[c.weather_code] || '🌡️';
+    return `🌤️ <b>الطقس في ${escapeHtml(name)}، ${escapeHtml(country || '')}</b>\n━━━━━━━━━━━━━━\n${desc}\n🌡️ الحرارة: <b>${c.temperature_2m}°C</b> (محسوسة ${c.apparent_temperature}°C)\n💧 الرطوبة: ${c.relative_humidity_2m}%\n💨 الرياح: ${c.wind_speed_10m} كم/س`;
+  } catch (e) {
+    console.error('Weather error:', e);
+    return '❌ فشل جلب حالة الطقس.';
+  }
+}
+
+// ==================== CRYPTO ====================
+
+const CRYPTO_ALIASES: Record<string, string> = {
+  btc: 'bitcoin', eth: 'ethereum', bnb: 'binancecoin', sol: 'solana', xrp: 'ripple',
+  ada: 'cardano', doge: 'dogecoin', trx: 'tron', ton: 'the-open-network', usdt: 'tether',
+};
+
+async function getCrypto(coin: string): Promise<string> {
+  try {
+    const id = CRYPTO_ALIASES[coin.toLowerCase()] || coin.toLowerCase();
+    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`);
+    const data = await res.json();
+    if (!data[id]) return '❌ عملة غير معروفة. جرّب: btc, eth, sol, bnb, ...';
+    const p = data[id];
+    const ch = p.usd_24h_change || 0;
+    return `💰 <b>${coin.toUpperCase()}</b>\n━━━━━━━━━━━━━━\n💵 السعر: <b>$${p.usd.toLocaleString()}</b>\n${ch >= 0 ? '📈' : '📉'} التغير 24س: <b>${ch.toFixed(2)}%</b>\n🏦 القيمة السوقية: $${Math.round(p.usd_market_cap || 0).toLocaleString()}`;
+  } catch (e) {
+    console.error('Crypto error:', e);
+    return '❌ فشل جلب سعر العملة.';
+  }
+}
+
+// ==================== TRANSLATE ====================
+
+async function translateText(target: string, text: string): Promise<string> {
+  try {
+    const out = await callAI(
+      `ترجم النص التالي إلى "${target}". أعد الترجمة فقط دون أي شرح أو إضافات:\n\n${text}`,
+      'أنت مترجم محترف دقيق. ترجم النص المطلوب إلى اللغة المطلوبة بدقة وطبيعية.',
+    );
+    return out.trim();
+  } catch {
+    return '❌ فشل الترجمة.';
+  }
+}
+
+// ==================== RSS ====================
+
+async function getRss(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return `❌ تعذّر جلب التغذية [${res.status}].`;
+    const xml = await res.text();
+    const feedTitle = cleanText(xml.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || 'RSS', 80);
+    const blocks = [...xml.matchAll(/<(?:item|entry)[\s\S]*?<\/(?:item|entry)>/gi)].slice(0, 6);
+    if (blocks.length === 0) return '❌ لا توجد عناصر في هذه التغذية.';
+    const items = blocks.map((b, i) => {
+      const block = b[0];
+      const title = cleanText(block.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || 'بدون عنوان', 120);
+      let link = block.match(/<link[^>]*>([\s\S]*?)<\/link>/i)?.[1]?.trim() || block.match(/<link[^>]+href="([^"]+)"/i)?.[1] || '';
+      link = decodeHtmlEntities(link).trim();
+      const lines = [`${i + 1}. <b>${escapeHtml(title)}</b>`];
+      if (link) lines.push(`🔗 <a href="${escapeHtml(link)}">قراءة</a>`);
+      return lines.join('\n');
+    }).join('\n\n');
+    return `📰 <b>${escapeHtml(feedTitle)}</b>\n━━━━━━━━━━━━━━\n${items}`;
+  } catch (e) {
+    console.error('RSS error:', e);
+    return '❌ فشل قراءة التغذية.';
   }
 }
 
@@ -1393,6 +1576,126 @@ async function handleCommand(supabase: any, update: any) {
       await sendMsg(chatId, `🌐 <b>نتائج البحث:</b>\n\n${result}`);
       break;
     }
+
+    case '/image': case '/img': case '/صورة': case '/صور': {
+      const query = args.join(' ');
+      if (!query) { await sendMsg(chatId, '🖼️ اكتب ما تريد البحث عنه:\n<code>/image ماهوراجا من جوجيتسو كايسن</code>'); break; }
+      await sendMsg(chatId, `🔍 جاري البحث عن صور "${query}"...`);
+      const images = await searchImages(query, 6);
+      if (images.length === 0) { await sendMsg(chatId, '😕 لم أجد صوراً مناسبة. جرّب كلمات أخرى.'); break; }
+      try {
+        const media = images.slice(0, 6).map((img, i) => ({
+          type: 'photo', media: img, ...(i === 0 ? { caption: `🖼️ نتائج: ${query}` } : {}),
+        }));
+        await tgCall('sendMediaGroup', { chat_id: chatId, media });
+      } catch {
+        let sent = 0;
+        for (const img of images) {
+          try { await tgCall('sendPhoto', { chat_id: chatId, photo: img }); sent++; } catch { /* skip */ }
+        }
+        if (sent === 0) await sendMsg(chatId, `😕 تعذّر إرسال الصور. الروابط:\n${images.map((u, i) => `${i + 1}. ${escapeHtml(u)}`).join('\n')}`);
+      }
+      break;
+    }
+
+    case '/searchfile': case '/file': case '/ملف': {
+      const fileTypes = ['pdf', 'zip', 'mp3', 'doc', 'docx', 'rar', 'epub', 'apk'];
+      let fileType = 'pdf';
+      let parts = [...args];
+      if (parts[0] && fileTypes.includes(parts[0].toLowerCase())) { fileType = parts.shift()!.toLowerCase(); }
+      const query = parts.join(' ');
+      if (!query) { await sendMsg(chatId, '📂 ابحث عن ملف:\n<code>/searchfile pdf Python</code>\n\nالأنواع: pdf, zip, mp3, doc, epub, apk'); break; }
+      await sendMsg(chatId, `🔍 جاري البحث عن ملفات ${fileType.toUpperCase()} عن "${query}"...`);
+      const result = await searchFiles(query, fileType);
+      await sendMsg(chatId, `📂 <b>نتائج الملفات:</b>\n\n${result}`);
+      break;
+    }
+
+    case '/get': case '/getfile': case '/جلب': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '⬇️ ابعت رابط مباشر:\n<code>/get https://example.com/file.pdf</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري جلب الملف...');
+      try {
+        const info = await fetchFileInfo(url);
+        if (info.size > 50 * 1024 * 1024) {
+          await sendMsg(chatId, `⚠️ حجم الملف كبير (${(info.size / 1048576).toFixed(1)}MB) ويتجاوز حد تيليجرام (50MB).\n🔗 الرابط المباشر:\n${escapeHtml(url)}`);
+          break;
+        }
+        const isImage = /^image\//i.test(info.contentType);
+        const isVideo = /^video\//i.test(info.contentType);
+        try {
+          if (isImage) await tgCall('sendPhoto', { chat_id: chatId, photo: url, caption: `✅ ${info.name}` });
+          else if (isVideo) await tgCall('sendVideo', { chat_id: chatId, video: url, caption: `✅ ${info.name}` });
+          else await tgCall('sendDocument', { chat_id: chatId, document: url, caption: `✅ ${info.name}` });
+        } catch {
+          await sendMsg(chatId, `✅ الرابط جاهز للتحميل:\n${escapeHtml(url)}`);
+        }
+      } catch (e) {
+        await sendMsg(chatId, humanError('جلب الملف', e));
+      }
+      break;
+    }
+
+    case '/browse': case '/تصفح': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '🌐 ابعت رابط الصفحة:\n<code>/browse https://example.com</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري تصفح الصفحة وتلخيصها...');
+      const result = await browsePage(url);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/weather': case '/طقس': case '/الطقس': {
+      const city = args.join(' ');
+      if (!city) { await sendMsg(chatId, '🌤️ اكتب اسم المدينة:\n<code>/weather القاهرة</code>'); break; }
+      const result = await getWeather(city);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/crypto': case '/coin': case '/عملة': {
+      const coin = args[0];
+      if (!coin) { await sendMsg(chatId, '💰 اكتب رمز العملة:\n<code>/crypto btc</code>\nمدعوم: btc, eth, sol, bnb, xrp ...'); break; }
+      const result = await getCrypto(coin);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+    case '/translate': case '/tr': case '/ترجم': {
+      let target = 'العربية';
+      let parts = [...args];
+      const langMap: Record<string, string> = { ar: 'العربية', en: 'الإنجليزية', fr: 'الفرنسية', es: 'الإسبانية', de: 'الألمانية', tr: 'التركية', ru: 'الروسية', it: 'الإيطالية', ja: 'اليابانية', zh: 'الصينية' };
+      if (parts[0] && langMap[parts[0].toLowerCase()]) { target = langMap[parts.shift()!.toLowerCase()]; }
+      let text = parts.join(' ') || replyMsg?.text || '';
+      if (!text) { await sendMsg(chatId, '🌍 الاستخدام:\n<code>/translate en مرحبا بالعالم</code>\nأو رد على رسالة بـ <code>/translate ar</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري الترجمة...');
+      const result = await translateText(target, text);
+      await sendMsg(chatId, `🌍 <b>الترجمة (${target}):</b>\n\n${escapeHtml(result)}`);
+      break;
+    }
+
+    case '/qr': case '/qrcode': {
+      const data = args.join(' ') || replyMsg?.text || '';
+      if (!data) { await sendMsg(chatId, '📱 اكتب النص أو الرابط:\n<code>/qr https://example.com</code>'); break; }
+      try {
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data=${encodeURIComponent(data)}`;
+        await tgCall('sendPhoto', { chat_id: chatId, photo: qrUrl, caption: `📱 QR Code:\n${data.slice(0, 200)}` });
+      } catch (e) {
+        await sendMsg(chatId, humanError('إنشاء QR', e));
+      }
+      break;
+    }
+
+    case '/rss': case '/feed': {
+      const url = (args[0] || replyMsg?.text || '').trim();
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📰 ابعت رابط RSS:\n<code>/rss https://example.com/feed.xml</code>'); break; }
+      await sendMsg(chatId, '⏳ جاري قراءة التغذية...');
+      const result = await getRss(url);
+      await sendMsg(chatId, result);
+      break;
+    }
+
+
 
     // ==================== ECONOMY ====================
     case '/daily': {
