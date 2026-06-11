@@ -872,6 +872,62 @@ async function browsePage(url: string): Promise<string> {
   }
 }
 
+// ==================== INTERACTIVE CHROME BROWSER (screenshots) ====================
+
+function normalizeUrl(input: string): string {
+  let u = (input || '').trim().replace(/^[<"']|[>"']$/g, '');
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u;
+}
+
+// Builds a real-Chrome rendered screenshot URL (thum.io renders pages with a headless Chrome).
+function buildScreenshotUrl(url: string, opts: { fullpage?: boolean; mobile?: boolean; wait?: number } = {}): string {
+  const parts: string[] = ['https://image.thum.io/get'];
+  parts.push('width', String(opts.mobile ? 430 : 1280));
+  if (opts.mobile) parts.push('viewportwidth', '430');
+  if (opts.fullpage) parts.push('fullpage');
+  parts.push('wait', String(opts.wait ?? 3));
+  parts.push('noanimate');
+  return parts.join('/') + '/' + url;
+}
+
+// Captures a website and sends the screenshot to Telegram. Returns true on success.
+async function sendScreenshot(chatId: number, rawUrl: string, opts: { fullpage?: boolean; mobile?: boolean } = {}, extraCaption = ''): Promise<boolean> {
+  const url = normalizeUrl(rawUrl);
+  if (!url || !/^https?:\/\/.+\..+/i.test(url)) {
+    await sendMsg(chatId, '🌐 ابعت رابط صحيح للموقع اللي عايز تصوّره.');
+    return false;
+  }
+  try { await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_photo' }); } catch { /* ignore */ }
+  const shot = buildScreenshotUrl(url, opts);
+  const caption = `📸 <b>لقطة شاشة</b> ${opts.mobile ? '📱 (جوال)' : '🖥️ (سطح مكتب)'}${opts.fullpage ? ' • صفحة كاملة' : ''}\n🔗 ${escapeHtml(url)}${extraCaption ? `\n${extraCaption}` : ''}`;
+  try {
+    await tgCall('sendPhoto', { chat_id: chatId, photo: shot, caption, parse_mode: 'HTML' });
+    return true;
+  } catch (e) {
+    console.error('Screenshot error:', e);
+    // Fallback: send as document (some pages exceed photo limits)
+    try {
+      await tgCall('sendDocument', { chat_id: chatId, document: shot, caption });
+      return true;
+    } catch {
+      await sendMsg(chatId, `❌ تعذّر تصوير الموقع دلوقتي. جرّب تاني أو غيّر الرابط.\n🔗 ${escapeHtml(url)}`);
+      return false;
+    }
+  }
+}
+
+// Full interactive open: screenshot + content summary + clickable links in one shot.
+async function openSite(chatId: number, rawUrl: string, opts: { fullpage?: boolean; mobile?: boolean } = {}) {
+  const url = normalizeUrl(rawUrl);
+  await sendScreenshot(chatId, url, opts);
+  try {
+    const summary = await browsePage(url);
+    await sendMsg(chatId, summary, undefined);
+  } catch { /* screenshot already sent */ }
+}
+
 // ==================== WEATHER ====================
 
 const WEATHER_CODES: Record<number, string> = {
