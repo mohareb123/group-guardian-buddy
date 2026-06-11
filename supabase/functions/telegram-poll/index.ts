@@ -311,7 +311,7 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
 `📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
     tools:
