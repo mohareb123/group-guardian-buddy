@@ -1745,6 +1745,8 @@ async function handleCommand(supabase: any, update: any) {
       await openSite(chatId, url, {});
       break;
     }
+
+    case '/weather': case '/طقس': case '/الطقس': {
       const city = args.join(' ');
       if (!city) { await sendMsg(chatId, '🌤️ اكتب اسم المدينة:\n<code>/weather القاهرة</code>'); break; }
       const result = await getWeather(city);
