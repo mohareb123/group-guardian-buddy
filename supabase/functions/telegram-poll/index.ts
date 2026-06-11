@@ -586,6 +586,14 @@ ${conversationContext || '(لا يوجد)'}
 أوامر إدارية بلغة طبيعية (احظر/اطرد/اكتم/حذّر/رقّي):
 - لو المستخدم مشرف أو المطور وطلب إجراء على شخص (بالرد عليه أو بذكر ID)، أضف في نهاية ردك بالضبط:
   [ACTION:{"type":"ban|kick|mute|unmute|warn|promote|demote","target_user_id":<ID>}]
+
+🌐 المتصفح التفاعلي (كروم):
+- لو المستخدم طلب يفتح/يصوّر/يشوف موقع، أو قال "صوّر/لقطة شاشة/افتح/ادخل/شوف موقع/screenshot"، استخرج اسم الموقع وحوّله لرابط كامل، ثم أضف في نهاية ردك بالضبط:
+  [BROWSER:{"action":"screenshot|open","url":"https://...","fullpage":true|false,"mobile":true|false}]
+  • استخدم "screenshot" لو طلب صورة فقط، و"open" لو عايز يتصفح/يلخّص محتوى الموقع كمان.
+  • fullpage=true لو قال "الصفحة كاملة"، mobile=true لو قال "موبايل/جوال".
+  • مثال: «فادي صوّرلي جوجل» → [BROWSER:{"action":"screenshot","url":"https://google.com","fullpage":false,"mobile":false}]
+  • مثال: «فادي افتح موقع ويكيبيديا ولخصه» → [BROWSER:{"action":"open","url":"https://wikipedia.org","fullpage":false,"mobile":false}]
 - لا تُنشئ JSON إلا للإجراءات الفعلية.`;
 
   try {
