@@ -140,7 +140,52 @@ async function callAI(prompt: string, systemPrompt: string, imageUrl?: string, m
   }, 3, 1000);
 }
 
-// ==================== CODE EXECUTION (Piston API) ====================
+// ==================== AI IMAGE GENERATION ====================
+async function generateAIImage(prompt: string): Promise<string | null> {
+  return await withRetry(async () => {
+    const res = await fetch(AI_GATEWAY_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-image-preview',
+        messages: [{ role: 'user', content: prompt }],
+        modalities: ['image', 'text'],
+      }),
+    });
+    if (res.status === 429 || res.status >= 500) throw new Error(`IMG ${res.status}`);
+    if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`IMG ${res.status}: ${t}`); }
+    const data = await res.json();
+    const imgs = data.choices?.[0]?.message?.images;
+    return imgs?.[0]?.image_url?.url || null;
+  }, 2, 1500);
+}
+
+async function sendAIImage(chatId: number, prompt: string, messageId?: number) {
+  try {
+    const dataUrl = await generateAIImage(prompt);
+    if (!dataUrl) { await sendMsg(chatId, '❌ معرفتش أولّد الصورة دلوقتي، جرّب وصف تاني.', undefined, messageId); return; }
+    // dataUrl is base64 → upload as multipart photo
+    const base64 = dataUrl.split(',')[1] || '';
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('caption', `🎨 ${prompt.slice(0, 200)}`);
+    if (messageId) form.append('reply_to_message_id', String(messageId));
+    form.append('photo', new Blob([bytes], { type: 'image/png' }), 'image.png');
+    const res = await fetch('https://connector-gateway.lovable.dev/telegram/sendPhoto', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'X-Connection-Api-Key': getEnv('TELEGRAM_API_KEY') },
+      body: form,
+    });
+    if (!res.ok) {
+      console.error('sendAIImage failed', res.status, await res.text().catch(() => ''));
+      await sendMsg(chatId, '❌ فشل إرسال الصورة المولّدة.', undefined, messageId);
+    }
+  } catch (e) {
+    console.error('generateAIImage error:', e);
+    await sendMsg(chatId, humanError('توليد الصورة', e), undefined, messageId);
+  }
+}
 
 const PISTON_LANGS: Record<string, { language: string; version: string }> = {
   python: { language: 'python', version: '3.10.0' },
