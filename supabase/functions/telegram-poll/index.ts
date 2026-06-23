@@ -556,18 +556,48 @@ async function tryTikwm(url: string): Promise<string | null> {
   } catch { return null; }
 }
 
+const INVIDIOUS_INSTANCES = [
+  'https://iv.melmac.space',
+  'https://invidious.nerdvpn.de',
+  'https://yewtu.be',
+  'https://inv.nadeko.net',
+  'https://invidious.privacyredirect.com',
+];
+
+// Extracts a direct progressive (audio+video) YouTube stream via Invidious.
+async function tryInvidious(videoId: string): Promise<string | null> {
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue;
+      const data = await res.json();
+      const streams = (data?.formatStreams || []).filter((s: any) => s?.url);
+      if (streams.length === 0) continue;
+      // prefer highest resolution mp4 progressive
+      streams.sort((a: any, b: any) => (parseInt(b.resolution) || 0) - (parseInt(a.resolution) || 0));
+      return streams[0].url;
+    } catch { continue; }
+  }
+  return null;
+}
+
 async function downloadVideo(url: string, supabase?: any): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
   const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
   const ytId = extractYouTubeId(url);
   let direct: string | null = null;
 
-  // For YouTube: try InnerTube player with cookies first (real session)
+  // For YouTube: try InnerTube player with cookies, then Invidious instances
   if (ytId) {
     const cookies = supabase ? await getYouTubeCookies(supabase) : null;
     direct = await ytInnertubePlayer(ytId, cookies);
+    if (!direct) direct = await tryInvidious(ytId);
   }
 
-  // Fallback: cobalt (supports YT, IG, TT, etc.)
+  // Generic fallbacks
   if (!direct) direct = await tryCobalt(url);
   if (!direct && isTikTok) direct = await tryTikwm(url);
   if (!direct) {
