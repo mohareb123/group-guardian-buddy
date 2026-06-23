@@ -187,6 +187,8 @@ async function sendAIImage(chatId: number, prompt: string, messageId?: number) {
   }
 }
 
+// ==================== CODE EXECUTION (Piston API) ====================
+
 const PISTON_LANGS: Record<string, { language: string; version: string }> = {
   python: { language: 'python', version: '3.10.0' },
   py: { language: 'python', version: '3.10.0' },
