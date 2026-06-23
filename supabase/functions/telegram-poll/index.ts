@@ -415,6 +415,8 @@ async function getYouTubeCookies(supabase: any): Promise<string | null> {
   } catch { return null; }
 }
 
+function _ytCookieCacheClear() { _ytCookieCache = null; }
+
 function getCookieValue(cookieHeader: string, name: string): string | null {
   const m = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return m ? m[1] : null;
