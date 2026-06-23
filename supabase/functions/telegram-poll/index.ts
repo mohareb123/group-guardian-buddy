@@ -641,7 +641,13 @@ ${conversationContext || '(لا يوجد)'}
   • fullpage=true لو قال "الصفحة كاملة"، mobile=true لو قال "موبايل/جوال".
   • مثال: «فادي صوّرلي جوجل» → [BROWSER:{"action":"screenshot","url":"https://google.com","fullpage":false,"mobile":false}]
   • مثال: «فادي افتح موقع ويكيبيديا ولخصه» → [BROWSER:{"action":"open","url":"https://wikipedia.org","fullpage":false,"mobile":false}]
-- لا تُنشئ JSON إلا للإجراءات الفعلية.`;
+- لا تُنشئ JSON إلا للإجراءات الفعلية.
+
+🎨 توليد الصور بالذكاء الاصطناعي:
+- لو المستخدم طلب "ارسم/صمّم/ولّد/اعملي صورة/generate image/draw"، استخرج وصف الصورة بالإنجليزية (أدق للنموذج) وأضف في نهاية ردك بالضبط:
+  [IMAGE:{"prompt":"detailed english description"}]
+  • مثال: «فادي ارسملي قطة فضائية» → [IMAGE:{"prompt":"a cute astronaut cat floating in space, digital art, highly detailed"}]
+  • لا تستخدم هذا إلا لو طلب رسم/توليد صورة جديدة (ليس تحليل صورة موجودة).`;
 
   try {
     const userPrompt = text || (imageUrl ? 'حلّل هذه الصورة بعمق وأخبرني ما الذي تراه ولماذا.' : '');
