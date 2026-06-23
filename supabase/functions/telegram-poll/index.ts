@@ -685,6 +685,21 @@ ${conversationContext || '(لا يوجد)'}
       } catch (e) { console.error('AI action error:', e); }
     }
 
+    // 🎨 AI image generation action
+    const imageGenMatch = reply.match(/\[IMAGE:(\{[\s\S]*?\})\]/);
+    if (imageGenMatch) {
+      cleanReply = cleanReply.replace(/\[IMAGE:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const im = JSON.parse(imageGenMatch[1]);
+        if (im.prompt) await sendAIImage(chatId, im.prompt, messageId);
+      } catch (e) {
+        console.error('AI image action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد وصف الصورة المطلوبة.');
+      }
+      return;
+    }
+
     // 🌐 Interactive browser action (screenshot / open site)
     const browserMatch = reply.match(/\[BROWSER:(\{[\s\S]*?\})\]/);
     if (browserMatch) {
