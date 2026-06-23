@@ -2202,7 +2202,7 @@ async function handleCommand(supabase: any, update: any) {
       if (progress >= challenge.target_value) {
         await supabase.from('telegram_challenge_completions').insert({ challenge_id: challenge.id, chat_id: chatId, user_id: userId });
         await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: challenge.reward_coins });
-        await sendMsg(chatId, `🎉 <b>${username} أكمل التحدي!</b>\n\n🏆 ${challenge.title}\n💰 +${challenge.reward_coins} عملة`);
+        await sendCelebration(supabase, chatId, `🎉 <b>${username} أكمل التحدي!</b>\n\n🏆 ${challenge.title}\n💰 +${challenge.reward_coins} عملة`);
       } else {
         await sendMsg(chatId, `📊 التقدم: ${progress}/${challenge.target_value}\n\nاستمر! 💪`);
       }
