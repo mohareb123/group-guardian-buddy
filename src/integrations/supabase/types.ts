@@ -303,6 +303,24 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_config: {
+        Row: {
+          key: string
+          updated_at: string
+          value: string | null
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value?: string | null
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: string | null
+        }
+        Relationships: []
+      }
       telegram_court_cases: {
         Row: {
           accused_user_id: number
