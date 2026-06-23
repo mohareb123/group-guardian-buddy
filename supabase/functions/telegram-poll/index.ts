@@ -396,6 +396,140 @@ function helpMenuText(cat: string): string {
   return sections[cat] || sections.all;
 }
 
+// ==================== YOUTUBE (cookies + InnerTube) ====================
+
+// Public InnerTube web key (not secret)
+const YT_INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
+let _ytCookieCache: { value: string | null; at: number } | null = null;
+
+// Reads YouTube cookies stored in telegram_config (pipe-separated) and
+// returns a proper "name=value; name=value" Cookie header string.
+async function getYouTubeCookies(supabase: any): Promise<string | null> {
+  try {
+    if (_ytCookieCache && Date.now() - _ytCookieCache.at < 60_000) return _ytCookieCache.value;
+    const raw = await getConfig(supabase, 'youtube_cookies');
+    const value = raw ? raw.split('|').map((p: string) => p.trim()).filter(Boolean).join('; ') : null;
+    _ytCookieCache = { value, at: Date.now() };
+    return value;
+  } catch { return null; }
+}
+
+function getCookieValue(cookieHeader: string, name: string): string | null {
+  const m = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return m ? m[1] : null;
+}
+
+// Builds the SAPISIDHASH Authorization header Google requires for authenticated
+// requests made from a non-browser client using account cookies.
+async function buildSapisidHash(cookieHeader: string, origin = 'https://www.youtube.com'): Promise<string | null> {
+  const sapisid = getCookieValue(cookieHeader, 'SAPISID')
+    || getCookieValue(cookieHeader, '__Secure-3PAPISID')
+    || getCookieValue(cookieHeader, '__Secure-1PAPISID');
+  if (!sapisid) return null;
+  const ts = Math.floor(Date.now() / 1000);
+  const data = new TextEncoder().encode(`${ts} ${sapisid} ${origin}`);
+  const digest = await crypto.subtle.digest('SHA-1', data);
+  const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `SAPISIDHASH ${ts}_${hex}`;
+}
+
+async function ytAuthHeaders(cookieHeader: string | null): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Origin': 'https://www.youtube.com',
+    'X-Origin': 'https://www.youtube.com',
+    'X-YouTube-Client-Name': '1',
+    'X-YouTube-Client-Version': '2.20240101.00.00',
+  };
+  if (cookieHeader) {
+    headers['Cookie'] = cookieHeader;
+    const auth = await buildSapisidHash(cookieHeader);
+    if (auth) {
+      headers['Authorization'] = auth;
+      headers['X-Goog-AuthUser'] = '0';
+    }
+  }
+  return headers;
+}
+
+// Real YouTube search using the InnerTube API with account cookies.
+async function ytInnertubeSearch(query: string, cookieHeader: string | null): Promise<SearchResult[]> {
+  const headers = await ytAuthHeaders(cookieHeader);
+  const res = await fetch(`https://www.youtube.com/youtubei/v1/search?key=${YT_INNERTUBE_KEY}&prettyPrint=false`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      context: { client: { clientName: 'WEB', clientVersion: '2.20240101.00.00', hl: 'ar', gl: 'EG' } },
+      query,
+    }),
+  });
+  if (!res.ok) throw new Error(`InnerTube search failed [${res.status}]`);
+  const data = await res.json();
+  const sections = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
+  const out: SearchResult[] = [];
+  for (const sec of sections) {
+    const items = sec?.itemSectionRenderer?.contents || [];
+    for (const it of items) {
+      const v = it?.videoRenderer;
+      if (!v?.videoId) continue;
+      const title = v.title?.runs?.[0]?.text || v.title?.simpleText || '';
+      const channel = v.ownerText?.runs?.[0]?.text || v.longBylineText?.runs?.[0]?.text || '';
+      const views = v.shortViewCountText?.simpleText || '';
+      const dur = v.lengthText?.simpleText || '';
+      if (!title) continue;
+      out.push({
+        title: cleanText(title, 140),
+        url: `https://www.youtube.com/watch?v=${v.videoId}`,
+        snippet: cleanText(`${channel}${views ? ` · ${views}` : ''}${dur ? ` · ${dur}` : ''}`, 180),
+      });
+      if (out.length >= 6) break;
+    }
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+function extractYouTubeId(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+// Uses InnerTube player (ANDROID + cookies) to get a direct, progressive
+// (audio+video) stream URL that Telegram can fetch without deciphering.
+async function ytInnertubePlayer(videoId: string, cookieHeader: string | null): Promise<string | null> {
+  try {
+    const headers = await ytAuthHeaders(cookieHeader);
+    const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${YT_INNERTUBE_KEY}&prettyPrint=false`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'ANDROID',
+            clientVersion: '19.09.37',
+            androidSdkVersion: 30,
+            hl: 'ar', gl: 'EG',
+            userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+          },
+        },
+        videoId,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.playabilityStatus?.status && data.playabilityStatus.status !== 'OK') return null;
+    const formats = data?.streamingData?.formats || [];
+    // progressive formats include both audio + video with a direct url
+    const mp4 = formats
+      .filter((f: any) => f.url && /mp4/i.test(f.mimeType || '') && f.audioQuality)
+      .sort((a: any, b: any) => (b.height || 0) - (a.height || 0));
+    const pick = mp4[0] || formats.find((f: any) => f.url);
+    return pick?.url || null;
+  } catch { return null; }
+}
+
 // ==================== VIDEO DOWNLOADER ====================
 
 async function tryCobalt(url: string): Promise<string | null> {
@@ -422,10 +556,19 @@ async function tryTikwm(url: string): Promise<string | null> {
   } catch { return null; }
 }
 
-async function downloadVideo(url: string): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
+async function downloadVideo(url: string, supabase?: any): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
   const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
-  // Try cobalt first (supports YT, IG, TT, etc.)
-  let direct = await tryCobalt(url);
+  const ytId = extractYouTubeId(url);
+  let direct: string | null = null;
+
+  // For YouTube: try InnerTube player with cookies first (real session)
+  if (ytId) {
+    const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+    direct = await ytInnertubePlayer(ytId, cookies);
+  }
+
+  // Fallback: cobalt (supports YT, IG, TT, etc.)
+  if (!direct) direct = await tryCobalt(url);
   if (!direct && isTikTok) direct = await tryTikwm(url);
   if (!direct) {
     return { ok: false, message: '😕 ما قدرت أحمّل الفيديو من اللينك ده. جرّب لينك تاني أو تأكد إن الفيديو متاح للعموم.' };
