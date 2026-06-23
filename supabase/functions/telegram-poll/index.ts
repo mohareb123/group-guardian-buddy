@@ -140,7 +140,79 @@ async function callAI(prompt: string, systemPrompt: string, imageUrl?: string, m
   }, 3, 1000);
 }
 
-// ==================== CODE EXECUTION (Piston API) ====================
+// ==================== AI IMAGE GENERATION ====================
+async function generateAIImage(prompt: string): Promise<string | null> {
+  return await withRetry(async () => {
+    const res = await fetch(AI_GATEWAY_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-image-preview',
+        messages: [{ role: 'user', content: prompt }],
+        modalities: ['image', 'text'],
+      }),
+    });
+    if (res.status === 429 || res.status >= 500) throw new Error(`IMG ${res.status}`);
+    if (!res.ok) { const t = await res.text().catch(() => ''); throw new Error(`IMG ${res.status}: ${t}`); }
+    const data = await res.json();
+    const imgs = data.choices?.[0]?.message?.images;
+    return imgs?.[0]?.image_url?.url || null;
+  }, 2, 1500);
+}
+
+async function sendAIImage(chatId: number, prompt: string, messageId?: number) {
+  try {
+    const dataUrl = await generateAIImage(prompt);
+    if (!dataUrl) { await sendMsg(chatId, '❌ معرفتش أولّد الصورة دلوقتي، جرّب وصف تاني.', undefined, messageId); return; }
+    // dataUrl is base64 → upload as multipart photo
+    const base64 = dataUrl.split(',')[1] || '';
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('caption', `🎨 ${prompt.slice(0, 200)}`);
+    if (messageId) form.append('reply_to_message_id', String(messageId));
+    form.append('photo', new Blob([bytes], { type: 'image/png' }), 'image.png');
+    const res = await fetch('https://connector-gateway.lovable.dev/telegram/sendPhoto', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`, 'X-Connection-Api-Key': getEnv('TELEGRAM_API_KEY') },
+      body: form,
+    });
+    if (!res.ok) {
+      console.error('sendAIImage failed', res.status, await res.text().catch(() => ''));
+      await sendMsg(chatId, '❌ فشل إرسال الصورة المولّدة.', undefined, messageId);
+    }
+  } catch (e) {
+    console.error('generateAIImage error:', e);
+    await sendMsg(chatId, humanError('توليد الصورة', e), undefined, messageId);
+  }
+}
+
+// ==================== CELEBRATION (task completion) ====================
+async function getConfig(supabase: any, key: string): Promise<string | null> {
+  try {
+    const { data } = await supabase.from('telegram_config').select('value').eq('key', key).single();
+    return data?.value || null;
+  } catch { return null; }
+}
+
+async function sendCelebration(supabase: any, chatId: number, caption: string) {
+  // Try a configured celebration video first, then animation, then plain message
+  const videoId = await getConfig(supabase, 'celebration_video');
+  if (videoId) {
+    try {
+      await tgCall('sendVideo', { chat_id: chatId, video: videoId, caption, parse_mode: 'HTML' });
+      return;
+    } catch (e) { console.error('celebration video failed:', e); }
+  }
+  const animId = await getConfig(supabase, 'celebration_animation');
+  if (animId) {
+    try {
+      await tgCall('sendAnimation', { chat_id: chatId, animation: animId, caption, parse_mode: 'HTML' });
+      return;
+    } catch (e) { console.error('celebration animation failed:', e); }
+  }
+  await sendMsg(chatId, `${caption}\n\n🎊🎉🥳🎈`);
+}
 
 const PISTON_LANGS: Record<string, { language: string; version: string }> = {
   python: { language: 'python', version: '3.10.0' },
@@ -594,7 +666,13 @@ ${conversationContext || '(لا يوجد)'}
   • fullpage=true لو قال "الصفحة كاملة"، mobile=true لو قال "موبايل/جوال".
   • مثال: «فادي صوّرلي جوجل» → [BROWSER:{"action":"screenshot","url":"https://google.com","fullpage":false,"mobile":false}]
   • مثال: «فادي افتح موقع ويكيبيديا ولخصه» → [BROWSER:{"action":"open","url":"https://wikipedia.org","fullpage":false,"mobile":false}]
-- لا تُنشئ JSON إلا للإجراءات الفعلية.`;
+- لا تُنشئ JSON إلا للإجراءات الفعلية.
+
+🎨 توليد الصور بالذكاء الاصطناعي:
+- لو المستخدم طلب "ارسم/صمّم/ولّد/اعملي صورة/generate image/draw"، استخرج وصف الصورة بالإنجليزية (أدق للنموذج) وأضف في نهاية ردك بالضبط:
+  [IMAGE:{"prompt":"detailed english description"}]
+  • مثال: «فادي ارسملي قطة فضائية» → [IMAGE:{"prompt":"a cute astronaut cat floating in space, digital art, highly detailed"}]
+  • لا تستخدم هذا إلا لو طلب رسم/توليد صورة جديدة (ليس تحليل صورة موجودة).`;
 
   try {
     const userPrompt = text || (imageUrl ? 'حلّل هذه الصورة بعمق وأخبرني ما الذي تراه ولماذا.' : '');
@@ -630,6 +708,21 @@ ${conversationContext || '(لا يوجد)'}
           }
         }
       } catch (e) { console.error('AI action error:', e); }
+    }
+
+    // 🎨 AI image generation action
+    const imageGenMatch = reply.match(/\[IMAGE:(\{[\s\S]*?\})\]/);
+    if (imageGenMatch) {
+      cleanReply = cleanReply.replace(/\[IMAGE:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const im = JSON.parse(imageGenMatch[1]);
+        if (im.prompt) await sendAIImage(chatId, im.prompt, messageId);
+      } catch (e) {
+        console.error('AI image action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد وصف الصورة المطلوبة.');
+      }
+      return;
     }
 
     // 🌐 Interactive browser action (screenshot / open site)
@@ -1330,7 +1423,11 @@ async function handleCommand(supabase: any, update: any) {
         return;
       }
 
-      return; // Ignore other private non-command messages
+      // No pending whisper → talk to Fadi (AI) directly in private chat
+      if (whisperContent || (msg.photo && msg.photo.length > 0)) {
+        await handleAI(supabase, chatId, userId, username, whisperContent, replyMsg, msg.message_id, msg.photo);
+      }
+      return;
     }
   }
 
@@ -1427,6 +1524,34 @@ async function handleCommand(supabase: any, update: any) {
     case '/dev': case '/developer': case '/owner':
       await sendMsg(chatId, `👨‍💻 <b>المطور</b>\n━━━━━━━━━━\n💬 للتواصل المباشر اضغط الزر:`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }], [{ text: '📢 قناة الدعم', url: 'https://t.me/Groupmastersupport' }]] });
       break;
+
+    // ==================== AI IMAGE GENERATION ====================
+    case '/image': case '/img': case '/صورة': case '/ارسم': case '/draw': {
+      let prompt = args.join(' ').trim();
+      if (!prompt && replyMsg?.text) prompt = replyMsg.text;
+      if (!prompt) { await sendMsg(chatId, '🎨 الاستخدام:\n<code>/image قطة فضائية تطير في الفضاء</code>'); break; }
+      await sendMsg(chatId, '🎨 بولّد الصورة... لحظة.');
+      await sendAIImage(chatId, prompt, msg.message_id);
+      break;
+    }
+
+    // ==================== CELEBRATION VIDEO (dev) ====================
+    case '/setcelebration': case '/setvideo': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const vid = replyMsg?.video?.file_id || replyMsg?.animation?.file_id || replyMsg?.document?.file_id;
+      if (!vid) { await sendMsg(chatId, '🎬 رد على فيديو (أو GIF) بهذا الأمر لتعيينه كفيديو احتفال إنجاز المهام.'); break; }
+      const key = replyMsg?.animation ? 'celebration_animation' : 'celebration_video';
+      await supabase.from('telegram_config').upsert({ key, value: vid, updated_at: new Date().toISOString() });
+      await sendMsg(chatId, '✅ تم حفظ فيديو الاحتفال! سيظهر عند إنجاز التحديات.');
+      break;
+    }
+
+    case '/testcelebration': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      await sendCelebration(supabase, chatId, '🎉 <b>تجربة احتفال إنجاز المهمة!</b>');
+      break;
+    }
+
 
     // ==================== CODE EXECUTION ====================
     case '/run': case '/exec': case '/code': {
@@ -2130,7 +2255,7 @@ async function handleCommand(supabase: any, update: any) {
       if (progress >= challenge.target_value) {
         await supabase.from('telegram_challenge_completions').insert({ challenge_id: challenge.id, chat_id: chatId, user_id: userId });
         await supabase.rpc('increment_coins', { p_user_id: userId, p_chat_id: chatId, p_amount: challenge.reward_coins });
-        await sendMsg(chatId, `🎉 <b>${username} أكمل التحدي!</b>\n\n🏆 ${challenge.title}\n💰 +${challenge.reward_coins} عملة`);
+        await sendCelebration(supabase, chatId, `🎉 <b>${username} أكمل التحدي!</b>\n\n🏆 ${challenge.title}\n💰 +${challenge.reward_coins} عملة`);
       } else {
         await sendMsg(chatId, `📊 التقدم: ${progress}/${challenge.target_value}\n\nاستمر! 💪`);
       }
