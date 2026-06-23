@@ -1021,7 +1021,16 @@ function formatBooks(data: any): string {
   return output.length > 3800 ? `${output.slice(0, 3797)}...` : output;
 }
 
-async function searchYouTube(query: string): Promise<string> {
+async function searchYouTube(query: string, supabase?: any): Promise<string> {
+  // 1) Real YouTube search via InnerTube using account cookies
+  try {
+    const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+    const results = await ytInnertubeSearch(query, cookies);
+    if (results.length > 0) return formatSearchResults(results);
+  } catch (error) {
+    console.error('InnerTube YouTube search error:', error);
+  }
+  // 2) Fallback to DuckDuckGo scraping
   try {
     const results = await duckSearch(query, { youtubeOnly: true });
     return formatSearchResults(results);
@@ -1030,6 +1039,7 @@ async function searchYouTube(query: string): Promise<string> {
     return '❌ فشل البحث. حاول لاحقاً.';
   }
 }
+
 
 async function searchWeb(query: string): Promise<string> {
   try {
