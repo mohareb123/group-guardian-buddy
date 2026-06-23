@@ -1923,7 +1923,7 @@ async function handleCommand(supabase: any, update: any) {
       const query = args.join(' ');
       if (!query) { await sendMsg(chatId, '❌ اكتب ما تريد البحث عنه: /searchyt موضوع'); break; }
       await sendMsg(chatId, `🔍 جاري البحث في يوتيوب عن "${query}"...`);
-      const result = await searchYouTube(query);
+      const result = await searchYouTube(query, supabase);
       await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${result}`);
       break;
     }
