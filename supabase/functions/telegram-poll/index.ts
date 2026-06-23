@@ -1525,6 +1525,34 @@ async function handleCommand(supabase: any, update: any) {
       await sendMsg(chatId, `👨‍💻 <b>المطور</b>\n━━━━━━━━━━\n💬 للتواصل المباشر اضغط الزر:`, { inline_keyboard: [[{ text: '💬 تواصل مع المطور', url: `tg://user?id=${DEVELOPER_ID}` }], [{ text: '📢 قناة الدعم', url: 'https://t.me/Groupmastersupport' }]] });
       break;
 
+    // ==================== AI IMAGE GENERATION ====================
+    case '/image': case '/img': case '/صورة': case '/ارسم': case '/draw': {
+      let prompt = args.join(' ').trim();
+      if (!prompt && replyMsg?.text) prompt = replyMsg.text;
+      if (!prompt) { await sendMsg(chatId, '🎨 الاستخدام:\n<code>/image قطة فضائية تطير في الفضاء</code>'); break; }
+      await sendMsg(chatId, '🎨 بولّد الصورة... لحظة.');
+      await sendAIImage(chatId, prompt, msg.message_id);
+      break;
+    }
+
+    // ==================== CELEBRATION VIDEO (dev) ====================
+    case '/setcelebration': case '/setvideo': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const vid = replyMsg?.video?.file_id || replyMsg?.animation?.file_id || replyMsg?.document?.file_id;
+      if (!vid) { await sendMsg(chatId, '🎬 رد على فيديو (أو GIF) بهذا الأمر لتعيينه كفيديو احتفال إنجاز المهام.'); break; }
+      const key = replyMsg?.animation ? 'celebration_animation' : 'celebration_video';
+      await supabase.from('telegram_config').upsert({ key, value: vid, updated_at: new Date().toISOString() });
+      await sendMsg(chatId, '✅ تم حفظ فيديو الاحتفال! سيظهر عند إنجاز التحديات.');
+      break;
+    }
+
+    case '/testcelebration': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      await sendCelebration(supabase, chatId, '🎉 <b>تجربة احتفال إنجاز المهمة!</b>');
+      break;
+    }
+
+
     // ==================== CODE EXECUTION ====================
     case '/run': case '/exec': case '/code': {
       const lang = (args[0] || '').trim();
