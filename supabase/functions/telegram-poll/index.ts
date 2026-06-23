@@ -1831,7 +1831,7 @@ async function handleCommand(supabase: any, update: any) {
       if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📥 ابعت رابط الفيديو:\n<code>/download https://...</code>\n\nمدعوم: TikTok / YouTube / Instagram'); break; }
       await sendMsg(chatId, '⏳ جاري استخراج الفيديو، لحظة من فضلك...');
       try {
-        const res = await downloadVideo(url);
+        const res = await downloadVideo(url, supabase);
         if (!res.ok || !res.videoUrl) { await sendMsg(chatId, res.message); break; }
         try {
           await tgCall('sendVideo', { chat_id: chatId, video: res.videoUrl, caption: '✅ تفضّل الفيديو', reply_to_message_id: msg.message_id });
