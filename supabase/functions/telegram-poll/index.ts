@@ -1735,6 +1735,26 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
+    case '/setcookies': case '/setcookie': case '/cookies': {
+      if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
+      const doc = replyMsg?.document;
+      if (!doc?.file_id) { await sendMsg(chatId, '🍪 رد على ملف <code>cookies.txt</code> (صيغة Netscape) بهذا الأمر لتحديث كوكيز يوتيوب.'); break; }
+      const text = await downloadTgFileText(doc.file_id);
+      if (!text) { await sendMsg(chatId, '❌ ما قدرت أقرأ الملف.'); break; }
+      const pairs: string[] = [];
+      for (const line of text.split(/\r?\n/)) {
+        if (!line || line.startsWith('#')) continue;
+        const parts = line.split('\t');
+        if (parts.length >= 7 && parts[5] && parts[6]) pairs.push(`${parts[5].trim()}=${parts[6].trim()}`);
+      }
+      if (pairs.length === 0) { await sendMsg(chatId, '❌ الملف مش بصيغة كوكيز Netscape صحيحة.'); break; }
+      await supabase.from('telegram_config').upsert({ key: 'youtube_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
+      _ytCookieCacheClear();
+      await sendMsg(chatId, `✅ تم تحديث كوكيز يوتيوب (${pairs.length} كوكي). البحث والتنزيل هيستخدموها دلوقتي.`);
+      break;
+    }
+
+
 
     // ==================== CODE EXECUTION ====================
     case '/run': case '/exec': case '/code': {
