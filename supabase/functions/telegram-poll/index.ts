@@ -187,7 +187,32 @@ async function sendAIImage(chatId: number, prompt: string, messageId?: number) {
   }
 }
 
-// ==================== CODE EXECUTION (Piston API) ====================
+// ==================== CELEBRATION (task completion) ====================
+async function getConfig(supabase: any, key: string): Promise<string | null> {
+  try {
+    const { data } = await supabase.from('telegram_config').select('value').eq('key', key).single();
+    return data?.value || null;
+  } catch { return null; }
+}
+
+async function sendCelebration(supabase: any, chatId: number, caption: string) {
+  // Try a configured celebration video first, then animation, then plain message
+  const videoId = await getConfig(supabase, 'celebration_video');
+  if (videoId) {
+    try {
+      await tgCall('sendVideo', { chat_id: chatId, video: videoId, caption, parse_mode: 'HTML' });
+      return;
+    } catch (e) { console.error('celebration video failed:', e); }
+  }
+  const animId = await getConfig(supabase, 'celebration_animation');
+  if (animId) {
+    try {
+      await tgCall('sendAnimation', { chat_id: chatId, animation: animId, caption, parse_mode: 'HTML' });
+      return;
+    } catch (e) { console.error('celebration animation failed:', e); }
+  }
+  await sendMsg(chatId, `${caption}\n\n🎊🎉🥳🎈`);
+}
 
 const PISTON_LANGS: Record<string, { language: string; version: string }> = {
   python: { language: 'python', version: '3.10.0' },
