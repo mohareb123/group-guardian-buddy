@@ -1330,7 +1330,11 @@ async function handleCommand(supabase: any, update: any) {
         return;
       }
 
-      return; // Ignore other private non-command messages
+      // No pending whisper → talk to Fadi (AI) directly in private chat
+      if (whisperContent || (msg.photo && msg.photo.length > 0)) {
+        await handleAI(supabase, chatId, userId, username, whisperContent, replyMsg, msg.message_id, msg.photo);
+      }
+      return;
     }
   }
 
