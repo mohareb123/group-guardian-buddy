@@ -627,6 +627,7 @@ async function tryCobalt(url: string): Promise<string | null> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({ url, videoQuality: '720', downloadMode: 'auto' }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) continue;
       const data = await res.json().catch(() => null);
