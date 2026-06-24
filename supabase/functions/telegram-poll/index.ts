@@ -679,6 +679,7 @@ async function tryInvidious(videoId: string): Promise<string | null> {
     try {
       const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
         headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) continue;
       const ct = res.headers.get('content-type') || '';
