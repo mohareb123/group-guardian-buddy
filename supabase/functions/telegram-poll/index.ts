@@ -1107,6 +1107,8 @@ ${conversationContext || '(لا يوجد)'}
       } catch (e) {
         console.error('AI browser action error:', e);
         await sendMsg(chatId, '❌ معرفتش أحدد الموقع المطلوب. ابعت الرابط بصيغة واضحة.');
+      }
+      return;
     }
 
     // 📥 Download action (videos / images from any site)
@@ -1122,8 +1124,6 @@ ${conversationContext || '(لا يوجد)'}
         console.error('AI download action error:', e);
         await sendMsg(chatId, '❌ معرفتش أحدد الرابط المطلوب تنزيله.');
       }
-      return;
-    }
       return;
     }
 
