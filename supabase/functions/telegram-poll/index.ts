@@ -71,7 +71,7 @@ async function fetchBytes(
   extraHeaders: Record<string, string> = {},
 ): Promise<{ bytes: Uint8Array; mime: string } | null> {
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept': '*/*', ...extraHeaders } });
+    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept': '*/*', ...extraHeaders }, signal: AbortSignal.timeout(45000) });
     if (!res.ok || !res.body) return null;
     const declared = parseInt(res.headers.get('content-length') || '0');
     if (declared && declared > maxBytes) return null;
