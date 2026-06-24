@@ -700,7 +700,7 @@ async function extractPageMedia(url: string): Promise<{ videos: string[]; images
   const videos: string[] = [];
   const images: string[] = [];
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'ar,en;q=0.9' } });
+    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'ar,en;q=0.9' }, signal: AbortSignal.timeout(12000) });
     if (!res.ok) return { videos, images };
     const ct = res.headers.get('content-type') || '';
     if (/^video\//i.test(ct)) return { videos: [url], images };
