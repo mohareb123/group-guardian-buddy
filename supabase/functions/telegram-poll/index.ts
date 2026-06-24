@@ -40,6 +40,84 @@ async function tgCall(method: string, body: any) {
   return data;
 }
 
+// Upload raw bytes to Telegram via the connector gateway (multipart).
+async function tgUpload(
+  method: string,
+  fields: Record<string, string | number>,
+  files: { field: string; bytes: Uint8Array; filename: string; mime: string }[],
+) {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
+  for (const f of files) form.append(f.field, new Blob([f.bytes as unknown as BlobPart], { type: f.mime }), f.filename);
+  const res = await fetch(`${GATEWAY_URL}/${method}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${getEnv('LOVABLE_API_KEY')}`,
+      'X-Connection-Api-Key': getEnv('TELEGRAM_API_KEY'),
+    },
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`TG ${method} upload failed [${res.status}]: ${JSON.stringify(data)}`);
+  return data;
+}
+
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+// Download a remote file into memory with a size cap (Telegram bot upload limit ~50MB).
+async function fetchBytes(
+  url: string,
+  maxBytes = 49 * 1024 * 1024,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept': '*/*', ...extraHeaders }, signal: AbortSignal.timeout(45000) });
+    if (!res.ok || !res.body) return null;
+    const declared = parseInt(res.headers.get('content-length') || '0');
+    if (declared && declared > maxBytes) return null;
+    const mime = res.headers.get('content-type') || 'application/octet-stream';
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength === 0 || buf.byteLength > maxBytes) return null;
+    return { bytes: buf, mime };
+  } catch { return null; }
+}
+
+// Send a video by URL: try uploading real bytes first (most reliable), then remote URL, then link.
+async function sendVideoSmart(chatId: number, videoUrl: string, caption: string, replyId?: number) {
+  const got = await fetchBytes(videoUrl);
+  if (got) {
+    try {
+      await tgUpload('sendVideo',
+        { chat_id: chatId, caption, parse_mode: 'HTML', ...(replyId ? { reply_to_message_id: replyId } : {}), supports_streaming: 'true' },
+        [{ field: 'video', bytes: got.bytes, filename: 'video.mp4', mime: got.mime.startsWith('video') ? got.mime : 'video/mp4' }]);
+      return true;
+    } catch (e) { console.error('sendVideoSmart upload failed:', e); }
+  }
+  try {
+    await tgCall('sendVideo', { chat_id: chatId, video: videoUrl, caption, parse_mode: 'HTML', ...(replyId ? { reply_to_message_id: replyId } : {}) });
+    return true;
+  } catch (e) { console.error('sendVideoSmart url failed:', e); }
+  await sendMsg(chatId, `${caption}\n🔗 ${escapeHtml(videoUrl)}`, undefined, replyId);
+  return false;
+}
+
+// Send a photo by URL: try uploading real bytes first, then remote URL.
+async function sendPhotoSmart(chatId: number, photoUrl: string, caption = '', replyId?: number) {
+  const got = await fetchBytes(photoUrl, 9 * 1024 * 1024);
+  if (got) {
+    try {
+      await tgUpload('sendPhoto',
+        { chat_id: chatId, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) },
+        [{ field: 'photo', bytes: got.bytes, filename: 'photo.jpg', mime: got.mime.startsWith('image') ? got.mime : 'image/jpeg' }]);
+      return true;
+    } catch (e) { console.error('sendPhotoSmart upload failed:', e); }
+  }
+  try {
+    await tgCall('sendPhoto', { chat_id: chatId, photo: photoUrl, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) });
+    return true;
+  } catch { return false; }
+}
+
 async function sendMsg(chatId: number, text: string, replyMarkup?: any, replyToMessageId?: number) {
   return tgCall('sendMessage', {
     chat_id: chatId,
@@ -534,28 +612,58 @@ async function ytInnertubePlayer(videoId: string, cookieHeader: string | null): 
 
 // ==================== VIDEO DOWNLOADER ====================
 
+const COBALT_INSTANCES = [
+  'https://cobalt-backend.canine.tools',
+  'https://api.cobalt.tools',
+  'https://co.eepy.today',
+  'https://cobalt-api.kwiatekmiki.com',
+  'https://nyc1.coba.lt',
+];
+
 async function tryCobalt(url: string): Promise<string | null> {
+  for (const host of COBALT_INSTANCES) {
+    try {
+      const res = await fetch(`${host}/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ url, videoQuality: '720', downloadMode: 'auto' }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      if (!data) continue;
+      if (data.status === 'tunnel' || data.status === 'stream' || data.status === 'redirect') {
+        if (data.url) return data.url;
+      }
+      if (data.status === 'picker' && Array.isArray(data.picker) && data.picker[0]?.url) return data.picker[0].url;
+      if (data.url) return data.url;
+    } catch { continue; }
+  }
+  return null;
+}
+
+// Returns the full TikTok media payload: HD video and/or image slideshow.
+async function getTikTokMedia(url: string): Promise<{ video?: string; images?: string[]; title?: string; music?: string } | null> {
   try {
-    const res = await fetch('https://api.cobalt.tools/api/json', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ url, vQuality: '720', aFormat: 'mp3' }),
+    const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, {
+      headers: { 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data.status === 'stream' || data.status === 'redirect' || data.status === 'tunnel') return data.url;
-    if (data.url) return data.url;
-    return null;
+    const d = data?.data;
+    if (!d) return null;
+    const images: string[] = Array.isArray(d.images) ? d.images.filter(Boolean) : [];
+    const video: string | undefined = d.hdplay || d.play || d.wmplay || undefined;
+    const music: string | undefined = d.music || d.music_info?.play || undefined;
+    if (images.length === 0 && !video) return null;
+    return { video, images, title: d.title || '', music };
   } catch { return null; }
 }
 
 async function tryTikwm(url: string): Promise<string | null> {
-  try {
-    const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.data?.hdplay || data?.data?.play || null;
-  } catch { return null; }
+  const m = await getTikTokMedia(url);
+  return m?.video || null;
 }
 
 const INVIDIOUS_INSTANCES = [
@@ -571,7 +679,8 @@ async function tryInvidious(videoId: string): Promise<string | null> {
   for (const base of INVIDIOUS_INSTANCES) {
     try {
       const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) continue;
       const ct = res.headers.get('content-type') || '';
@@ -587,6 +696,37 @@ async function tryInvidious(videoId: string): Promise<string | null> {
   return null;
 }
 
+// Generic media extraction from any web page: OpenGraph / Twitter / <video> / <img> tags.
+async function extractPageMedia(url: string): Promise<{ videos: string[]; images: string[] }> {
+  const videos: string[] = [];
+  const images: string[] = [];
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'ar,en;q=0.9' }, signal: AbortSignal.timeout(12000) });
+    if (!res.ok) return { videos, images };
+    const ct = res.headers.get('content-type') || '';
+    if (/^video\//i.test(ct)) return { videos: [url], images };
+    if (/^image\//i.test(ct)) return { videos, images: [url] };
+    const html = await res.text();
+    const base = new URL(url);
+    const abs = (u: string) => { try { return new URL(decodeHtmlEntities(u), base).href; } catch { return ''; } };
+    const push = (arr: string[], u: string) => { const a = abs(u); if (a && !arr.includes(a)) arr.push(a); };
+
+    const metaPatterns = [
+      /<meta[^>]+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["'][^>]+content=["']([^"']+)["']/gi,
+    ];
+    for (const re of metaPatterns) for (const m of html.matchAll(re)) push(videos, m[1]);
+    for (const m of html.matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url|:url)?|twitter:image(?::src)?)["'][^>]+content=["']([^"']+)["']/gi)) push(images, m[1]);
+
+    for (const m of html.matchAll(/<video[^>]+src=["']([^"']+)["']/gi)) push(videos, m[1]);
+    for (const m of html.matchAll(/<source[^>]+src=["']([^"']+\.(?:mp4|webm|m3u8)[^"']*)["']/gi)) push(videos, m[1]);
+    for (const m of html.matchAll(/["'](https?:\/\/[^"']+\.mp4[^"']*)["']/gi)) push(videos, m[1]);
+    if (images.length === 0) {
+      for (const m of html.matchAll(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/gi)) push(images, m[1]);
+    }
+  } catch (e) { console.error('extractPageMedia error:', e); }
+  return { videos: videos.slice(0, 5), images: images.slice(0, 10) };
+}
+
 async function downloadVideo(url: string, supabase?: any): Promise<{ ok: boolean; videoUrl?: string; message: string }> {
   const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
   const ytId = extractYouTubeId(url);
@@ -600,13 +740,63 @@ async function downloadVideo(url: string, supabase?: any): Promise<{ ok: boolean
   }
 
   // Generic fallbacks
-  if (!direct) direct = await tryCobalt(url);
   if (!direct && isTikTok) direct = await tryTikwm(url);
+  if (!direct) direct = await tryCobalt(url);
+  if (!direct) {
+    const media = await extractPageMedia(url);
+    if (media.videos.length) direct = media.videos[0];
+  }
   if (!direct) {
     return { ok: false, message: '😕 ما قدرت أحمّل الفيديو من اللينك ده. جرّب لينك تاني أو تأكد إن الفيديو متاح للعموم.' };
   }
   return { ok: true, videoUrl: direct, message: '✅ تم استخراج الفيديو' };
 }
+
+// Unified download flow: TikTok (video+slideshow), YouTube, and any site with media.
+async function handleDownload(chatId: number, rawUrl: string, supabase: any, replyId?: number) {
+  const url = (rawUrl || '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) {
+    await sendMsg(chatId, '📥 ابعت رابط صحيح:\n<code>/download https://...</code>\n\nمدعوم: تيك توك (فيديو + صور) / يوتيوب / إنستجرام / أي موقع فيه فيديو أو صور', undefined, replyId);
+    return;
+  }
+  try { await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_video' }); } catch { /* ignore */ }
+
+  const isTikTok = /tiktok\.com|vm\.tiktok|vt\.tiktok/i.test(url);
+  if (isTikTok) {
+    const media = await getTikTokMedia(url);
+    if (media?.images?.length) {
+      const caption = `✅ ${media.title ? escapeHtml(media.title.slice(0, 200)) : 'صور تيك توك'}`;
+      try {
+        const group = media.images.slice(0, 10).map((img, i) => ({ type: 'photo', media: img, ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}) }));
+        await tgCall('sendMediaGroup', { chat_id: chatId, media: group });
+      } catch {
+        for (const img of media.images.slice(0, 10)) await sendPhotoSmart(chatId, img);
+      }
+      if (media.music) { try { await tgCall('sendAudio', { chat_id: chatId, audio: media.music, caption: '🎵 الصوت' }); } catch { /* ignore */ } }
+      return;
+    }
+    if (media?.video) { await sendVideoSmart(chatId, media.video, '✅ تفضّل فيديو تيك توك', replyId); return; }
+  }
+
+  const res = await downloadVideo(url, supabase);
+  if (res.ok && res.videoUrl) { await sendVideoSmart(chatId, res.videoUrl, '✅ تفضّل الفيديو', replyId); return; }
+
+  // No video found → try sending images from the page (sites with photos).
+  const media = await extractPageMedia(url);
+  if (media.images.length) {
+    try {
+      const group = media.images.slice(0, 10).map((img, i) => ({ type: 'photo', media: img, ...(i === 0 ? { caption: '✅ صور من الصفحة' } : {}) }));
+      await tgCall('sendMediaGroup', { chat_id: chatId, media: group });
+    } catch {
+      let sent = 0;
+      for (const img of media.images.slice(0, 10)) { if (await sendPhotoSmart(chatId, img)) sent++; }
+      if (sent === 0) { await sendMsg(chatId, res.message, undefined, replyId); }
+    }
+    return;
+  }
+  await sendMsg(chatId, res.message, undefined, replyId);
+}
+
 
 async function safeRpc(supabase: any, fn: string, params: any) {
   try { await supabase.rpc(fn, params); } catch (e) { console.error(`rpc ${fn} error:`, e); }
@@ -847,7 +1037,14 @@ ${conversationContext || '(لا يوجد)'}
 - لو المستخدم طلب "ارسم/صمّم/ولّد/اعملي صورة/generate image/draw"، استخرج وصف الصورة بالإنجليزية (أدق للنموذج) وأضف في نهاية ردك بالضبط:
   [IMAGE:{"prompt":"detailed english description"}]
   • مثال: «فادي ارسملي قطة فضائية» → [IMAGE:{"prompt":"a cute astronaut cat floating in space, digital art, highly detailed"}]
-  • لا تستخدم هذا إلا لو طلب رسم/توليد صورة جديدة (ليس تحليل صورة موجودة).`;
+  • لا تستخدم هذا إلا لو طلب رسم/توليد صورة جديدة (ليس تحليل صورة موجودة).
+
+📥 تنزيل الفيديوهات والصور:
+- لو المستخدم بعت رابط فيديو/صور (تيك توك، يوتيوب، إنستجرام، أو أي موقع فيه فيديو أو صور) وطلب تنزيله/تحميله/"نزّلهولي"، أضف في نهاية ردك بالضبط:
+  [DOWNLOAD:{"url":"https://..."}]
+  • يدعم فيديوهات تيك توك وصوره (سلايد شو)، يوتيوب، وأي رابط مباشر لفيديو أو صورة.
+  • مثال: «فادي نزّلي الفيديو ده https://...» → [DOWNLOAD:{"url":"https://..."}]
+  • استخدم الرابط الكامل الذي أرسله المستخدم كما هو.`;
 
   try {
     const userPrompt = text || (imageUrl ? 'حلّل هذه الصورة بعمق وأخبرني ما الذي تراه ولماذا.' : '');
@@ -913,6 +1110,22 @@ ${conversationContext || '(لا يوجد)'}
       } catch (e) {
         console.error('AI browser action error:', e);
         await sendMsg(chatId, '❌ معرفتش أحدد الموقع المطلوب. ابعت الرابط بصيغة واضحة.');
+      }
+      return;
+    }
+
+    // 📥 Download action (videos / images from any site)
+    const downloadMatch = reply.match(/\[DOWNLOAD:(\{[\s\S]*?\})\]/);
+    if (downloadMatch) {
+      cleanReply = cleanReply.replace(/\[DOWNLOAD:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const d = JSON.parse(downloadMatch[1]);
+        if (d.url) await handleDownload(chatId, normalizeUrl(d.url), supabase, messageId);
+        else await sendMsg(chatId, '❌ ابعت رابط الفيديو أو الصور المطلوب تنزيله.');
+      } catch (e) {
+        console.error('AI download action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد الرابط المطلوب تنزيله.');
       }
       return;
     }
@@ -1185,15 +1398,36 @@ function normalizeUrl(input: string): string {
   return u;
 }
 
-// Builds a real-Chrome rendered screenshot URL (thum.io renders pages with a headless Chrome).
-function buildScreenshotUrl(url: string, opts: { fullpage?: boolean; mobile?: boolean; wait?: number } = {}): string {
-  const parts: string[] = ['https://image.thum.io/get'];
-  parts.push('width', String(opts.mobile ? 430 : 1280));
-  if (opts.mobile) parts.push('viewportwidth', '430');
-  if (opts.fullpage) parts.push('fullpage');
-  parts.push('wait', String(opts.wait ?? 3));
-  parts.push('noanimate');
-  return parts.join('/') + '/' + url;
+// Multiple real-Chrome screenshot providers; tried in order until one returns a valid image.
+function buildScreenshotUrls(url: string, opts: { fullpage?: boolean; mobile?: boolean; wait?: number } = {}): string[] {
+  const width = opts.mobile ? 430 : 1280;
+  const enc = encodeURIComponent(url);
+  const urls: string[] = [];
+  // thum.io (headless Chrome)
+  const thum = ['https://image.thum.io/get', 'width', String(width)];
+  if (opts.mobile) thum.push('viewportwidth', '430');
+  if (opts.fullpage) thum.push('fullpage');
+  thum.push('wait', String(opts.wait ?? 3), 'noanimate');
+  urls.push(thum.join('/') + '/' + url);
+  // WordPress mShots (free headless Chrome)
+  urls.push(`https://s.wordpress.com/mshots/v1/${enc}?w=${width}${opts.fullpage ? '' : '&h=' + (opts.mobile ? 900 : 720)}`);
+  // Microlink screenshot (returns image bytes via embed)
+  urls.push(`https://api.microlink.io/?url=${enc}&screenshot=true&meta=false&embed=screenshot.url&viewport.width=${width}${opts.fullpage ? '&screenshot.fullPage=true' : ''}`);
+  return urls;
+}
+
+// Fetches a rendered screenshot as bytes from the first working provider.
+async function captureScreenshot(url: string, opts: { fullpage?: boolean; mobile?: boolean } = {}): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  for (const shotUrl of buildScreenshotUrls(url, opts)) {
+    // mShots returns a placeholder until the render is ready; retry a couple of times.
+    const attempts = shotUrl.includes('mshots') ? 3 : 1;
+    for (let i = 0; i < attempts; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, 2500));
+      const got = await fetchBytes(shotUrl, 9 * 1024 * 1024, { 'Referer': url });
+      if (got && /image\//i.test(got.mime) && got.bytes.byteLength > 3000) return got;
+    }
+  }
+  return null;
 }
 
 // Captures a website and sends the screenshot to Telegram. Returns true on success.
@@ -1204,19 +1438,30 @@ async function sendScreenshot(chatId: number, rawUrl: string, opts: { fullpage?:
     return false;
   }
   try { await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_photo' }); } catch { /* ignore */ }
-  const shot = buildScreenshotUrl(url, opts);
   const caption = `📸 <b>لقطة شاشة</b> ${opts.mobile ? '📱 (جوال)' : '🖥️ (سطح مكتب)'}${opts.fullpage ? ' • صفحة كاملة' : ''}\n🔗 ${escapeHtml(url)}${extraCaption ? `\n${extraCaption}` : ''}`;
+  const shot = await captureScreenshot(url, opts);
+  if (!shot) {
+    await sendMsg(chatId, `❌ تعذّر تصوير الموقع دلوقتي. جرّب تاني أو غيّر الرابط.\n🔗 ${escapeHtml(url)}`);
+    return false;
+  }
   try {
-    await tgCall('sendPhoto', { chat_id: chatId, photo: shot, caption, parse_mode: 'HTML' });
+    // Full-page shots can be tall → send as document to avoid Telegram photo ratio limits.
+    if (opts.fullpage) {
+      await tgUpload('sendDocument', { chat_id: chatId, caption, parse_mode: 'HTML' },
+        [{ field: 'document', bytes: shot.bytes, filename: 'screenshot.png', mime: shot.mime || 'image/png' }]);
+    } else {
+      await tgUpload('sendPhoto', { chat_id: chatId, caption, parse_mode: 'HTML' },
+        [{ field: 'photo', bytes: shot.bytes, filename: 'screenshot.png', mime: shot.mime || 'image/png' }]);
+    }
     return true;
   } catch (e) {
-    console.error('Screenshot error:', e);
-    // Fallback: send as document (some pages exceed photo limits)
+    console.error('Screenshot send error:', e);
     try {
-      await tgCall('sendDocument', { chat_id: chatId, document: shot, caption });
+      await tgUpload('sendDocument', { chat_id: chatId, caption, parse_mode: 'HTML' },
+        [{ field: 'document', bytes: shot.bytes, filename: 'screenshot.png', mime: shot.mime || 'image/png' }]);
       return true;
     } catch {
-      await sendMsg(chatId, `❌ تعذّر تصوير الموقع دلوقتي. جرّب تاني أو غيّر الرابط.\n🔗 ${escapeHtml(url)}`);
+      await sendMsg(chatId, `❌ تعذّر إرسال لقطة الموقع دلوقتي. جرّب تاني.\n🔗 ${escapeHtml(url)}`);
       return false;
     }
   }
@@ -1880,18 +2125,12 @@ async function handleCommand(supabase: any, update: any) {
     // ==================== VIDEO DOWNLOAD ====================
     case '/download': case '/dl': case '/تنزيل': {
       const url = (args[0] || replyMsg?.text || '').trim();
-      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📥 ابعت رابط الفيديو:\n<code>/download https://...</code>\n\nمدعوم: TikTok / YouTube / Instagram'); break; }
-      await sendMsg(chatId, '⏳ جاري استخراج الفيديو، لحظة من فضلك...');
+      if (!url || !/^https?:\/\//i.test(url)) { await sendMsg(chatId, '📥 ابعت رابط:\n<code>/download https://...</code>\n\nمدعوم: تيك توك (فيديو + صور) / يوتيوب / إنستجرام / أي موقع فيه فيديو أو صور'); break; }
+      await sendMsg(chatId, '⏳ جاري استخراج الوسائط، لحظة من فضلك...');
       try {
-        const res = await downloadVideo(url, supabase);
-        if (!res.ok || !res.videoUrl) { await sendMsg(chatId, res.message); break; }
-        try {
-          await tgCall('sendVideo', { chat_id: chatId, video: res.videoUrl, caption: '✅ تفضّل الفيديو', reply_to_message_id: msg.message_id });
-        } catch {
-          await sendMsg(chatId, `✅ تم الاستخراج. الرابط المباشر:\n${escapeHtml(res.videoUrl)}`, undefined, msg.message_id);
-        }
+        await handleDownload(chatId, url, supabase, msg.message_id);
       } catch (e) {
-        await sendMsg(chatId, humanError('تحميل الفيديو', e), undefined, msg.message_id);
+        await sendMsg(chatId, humanError('تحميل الوسائط', e), undefined, msg.message_id);
       }
       break;
     }
@@ -2002,9 +2241,7 @@ async function handleCommand(supabase: any, update: any) {
         await tgCall('sendMediaGroup', { chat_id: chatId, media });
       } catch {
         let sent = 0;
-        for (const img of images) {
-          try { await tgCall('sendPhoto', { chat_id: chatId, photo: img }); sent++; } catch { /* skip */ }
-        }
+        for (const img of images) { if (await sendPhotoSmart(chatId, img)) sent++; }
         if (sent === 0) await sendMsg(chatId, `😕 تعذّر إرسال الصور. الروابط:\n${images.map((u, i) => `${i + 1}. ${escapeHtml(u)}`).join('\n')}`);
       }
       break;
@@ -2033,14 +2270,26 @@ async function handleCommand(supabase: any, update: any) {
           await sendMsg(chatId, `⚠️ حجم الملف كبير (${(info.size / 1048576).toFixed(1)}MB) ويتجاوز حد تيليجرام (50MB).\n🔗 الرابط المباشر:\n${escapeHtml(url)}`);
           break;
         }
-        const isImage = /^image\//i.test(info.contentType);
-        const isVideo = /^video\//i.test(info.contentType);
-        try {
-          if (isImage) await tgCall('sendPhoto', { chat_id: chatId, photo: url, caption: `✅ ${info.name}` });
-          else if (isVideo) await tgCall('sendVideo', { chat_id: chatId, video: url, caption: `✅ ${info.name}` });
-          else await tgCall('sendDocument', { chat_id: chatId, document: url, caption: `✅ ${info.name}` });
-        } catch {
-          await sendMsg(chatId, `✅ الرابط جاهز للتحميل:\n${escapeHtml(url)}`);
+        const isImage = /^image\//i.test(info.contentType) || /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(url);
+        const isVideo = /^video\//i.test(info.contentType) || /\.(mp4|webm|mov|mkv)(\?|$)/i.test(url);
+        // Download bytes and upload directly (handles hotlink-protected CDNs that Telegram can't fetch).
+        const got = await fetchBytes(url);
+        if (got) {
+          try {
+            if (isImage) await tgUpload('sendPhoto', { chat_id: chatId, caption: `✅ ${info.name}` }, [{ field: 'photo', bytes: got.bytes, filename: info.name || 'image.jpg', mime: got.mime }]);
+            else if (isVideo) await tgUpload('sendVideo', { chat_id: chatId, caption: `✅ ${info.name}`, supports_streaming: 'true' }, [{ field: 'video', bytes: got.bytes, filename: info.name || 'video.mp4', mime: got.mime }]);
+            else await tgUpload('sendDocument', { chat_id: chatId, caption: `✅ ${info.name}` }, [{ field: 'document', bytes: got.bytes, filename: info.name || 'file', mime: got.mime }]);
+          } catch {
+            await sendMsg(chatId, `✅ الرابط جاهز للتحميل:\n${escapeHtml(url)}`);
+          }
+        } else {
+          try {
+            if (isImage) await tgCall('sendPhoto', { chat_id: chatId, photo: url, caption: `✅ ${info.name}` });
+            else if (isVideo) await tgCall('sendVideo', { chat_id: chatId, video: url, caption: `✅ ${info.name}` });
+            else await tgCall('sendDocument', { chat_id: chatId, document: url, caption: `✅ ${info.name}` });
+          } catch {
+            await sendMsg(chatId, `✅ الرابط جاهز للتحميل:\n${escapeHtml(url)}`);
+          }
         }
       } catch (e) {
         await sendMsg(chatId, humanError('جلب الملف', e));
@@ -2057,7 +2306,7 @@ async function handleCommand(supabase: any, update: any) {
       break;
     }
 
-    case '/screenshot': case '/shot': case '/صور': case '/شوت': case '/لقطة': {
+    case '/screenshot': case '/shot': case '/شوت': case '/لقطة': {
       const raw = (args.join(' ') || replyMsg?.text || '').trim();
       const flags = raw.toLowerCase();
       const mobile = /موبايل|جوال|mobile|phone/.test(flags);
