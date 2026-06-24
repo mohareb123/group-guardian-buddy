@@ -647,6 +647,7 @@ async function getTikTokMedia(url: string): Promise<{ video?: string; images?: s
   try {
     const res = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}&hd=1`, {
       headers: { 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
     const data = await res.json();
