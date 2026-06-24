@@ -1107,7 +1107,23 @@ ${conversationContext || '(لا يوجد)'}
       } catch (e) {
         console.error('AI browser action error:', e);
         await sendMsg(chatId, '❌ معرفتش أحدد الموقع المطلوب. ابعت الرابط بصيغة واضحة.');
+    }
+
+    // 📥 Download action (videos / images from any site)
+    const downloadMatch = reply.match(/\[DOWNLOAD:(\{[\s\S]*?\})\]/);
+    if (downloadMatch) {
+      cleanReply = cleanReply.replace(/\[DOWNLOAD:\{[\s\S]*?\}\]/, '').trim();
+      if (cleanReply) await sendMsg(chatId, `🤖 ${cleanReply}`, undefined, messageId);
+      try {
+        const d = JSON.parse(downloadMatch[1]);
+        if (d.url) await handleDownload(chatId, normalizeUrl(d.url), supabase, messageId);
+        else await sendMsg(chatId, '❌ ابعت رابط الفيديو أو الصور المطلوب تنزيله.');
+      } catch (e) {
+        console.error('AI download action error:', e);
+        await sendMsg(chatId, '❌ معرفتش أحدد الرابط المطلوب تنزيله.');
       }
+      return;
+    }
       return;
     }
 
