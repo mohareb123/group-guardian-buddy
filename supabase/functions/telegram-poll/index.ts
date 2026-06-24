@@ -48,7 +48,7 @@ async function tgUpload(
 ) {
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
-  for (const f of files) form.append(f.field, new Blob([f.bytes], { type: f.mime }), f.filename);
+  for (const f of files) form.append(f.field, new Blob([f.bytes as unknown as BlobPart], { type: f.mime }), f.filename);
   const res = await fetch(`${GATEWAY_URL}/${method}`, {
     method: 'POST',
     headers: {
