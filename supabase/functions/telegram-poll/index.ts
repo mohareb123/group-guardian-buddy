@@ -3159,7 +3159,29 @@ async function handleCallback(supabase: any, cq: any) {
     }
   }
 
-  if (data.startsWith('quiz_')) {
+  // YouTube video/audio download from search results
+  if (data.startsWith('ytv:') || data.startsWith('yta:')) {
+    const [kind, videoId] = data.split(':');
+    const isAudio = kind === 'yta';
+    await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: isAudio ? '🎵 جاري تحميل الصوت...' : '🎬 جاري تحميل الفيديو...' });
+    try {
+      await tgCall('sendChatAction', { chat_id: chatId, action: isAudio ? 'upload_voice' : 'upload_video' }).catch(() => {});
+      if (isAudio) {
+        const audio = await getYouTubeAudio(videoId, supabase);
+        if (!audio) { await sendMsg(chatId, '😕 ما قدرتش أحمّل الصوت. جرّب نتيجة تانية.'); return; }
+        await sendAudioSmart(chatId, audio, { caption: '🎵 تفضّل الصوت', title: 'audio' });
+      } else {
+        const res = await downloadVideo(`https://www.youtube.com/watch?v=${videoId}`, supabase);
+        if (res.ok && res.videoUrl) await sendVideoSmart(chatId, res.videoUrl, '✅ تفضّل الفيديو');
+        else await sendMsg(chatId, res.message);
+      }
+    } catch (e) {
+      await sendMsg(chatId, humanError('التحميل', e));
+    }
+    return;
+  }
+
+
     const [, sel, cor] = data.split('_');
     if (sel === cor) {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
