@@ -461,15 +461,15 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث عن فيديوهات يوتيوب 🎬\n/music — بحث وتنزيل موسيقى (سبوتيفاي) 🎵\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
-`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/searchyt &lt;بحث&gt; — فيديوهات يوتيوب + تحميل 🎬\n/music &lt;بحث&gt; — أغاني سبوتيفاي كصوت 🎵\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
     tools:
 `🧰 <b>أدوات مفيدة</b>\n━━━━━━━━━━━━━━\n🌤️ /weather &lt;مدينة&gt; — الطقس\n💰 /crypto &lt;عملة&gt; — أسعار العملات الرقمية\n🌍 /translate &lt;لغة&gt; &lt;نص&gt; — ترجمة\n📱 /qr &lt;نص/رابط&gt; — توليد QR Code\n📰 /rss &lt;رابط&gt; — قراءة تغذية RSS`,
     fun:
 `🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
     all:
-`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /browse\n⬇️ <b>تنزيل:</b> /download /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /music /browse\n⬇️ <b>تنزيل:</b> /download /music /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
   };
   return sections[cat] || sections.all;
 }
@@ -609,6 +609,239 @@ async function ytInnertubePlayer(videoId: string, cookieHeader: string | null): 
     return pick?.url || null;
   } catch { return null; }
 }
+
+// Extracts a direct audio-only stream URL (m4a/webm) for a YouTube video using
+// the InnerTube ANDROID client + cookies. Falls back to progressive formats.
+async function ytInnertubeAudio(videoId: string, cookieHeader: string | null): Promise<string | null> {
+  try {
+    const headers = await ytAuthHeaders(cookieHeader);
+    const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${YT_INNERTUBE_KEY}&prettyPrint=false`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'ANDROID',
+            clientVersion: '19.09.37',
+            androidSdkVersion: 30,
+            hl: 'ar', gl: 'EG',
+            userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+          },
+        },
+        videoId,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.playabilityStatus?.status && data.playabilityStatus.status !== 'OK') return null;
+    const adaptive = data?.streamingData?.adaptiveFormats || [];
+    const audio = adaptive
+      .filter((f: any) => f.url && /audio/i.test(f.mimeType || ''))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+    if (audio[0]?.url) return audio[0].url;
+    // fallback: progressive (audio+video) stream
+    const formats = data?.streamingData?.formats || [];
+    const pick = formats.find((f: any) => f.url);
+    return pick?.url || null;
+  } catch { return null; }
+}
+
+// Extracts an audio stream for a YouTube video via Invidious (fallback).
+async function tryInvidiousAudio(videoId: string): Promise<string | null> {
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue;
+      const data = await res.json();
+      const audio = (data?.adaptiveFormats || [])
+        .filter((s: any) => s?.url && /audio/i.test(s.type || ''))
+        .sort((a: any, b: any) => (parseInt(b.bitrate) || 0) - (parseInt(a.bitrate) || 0));
+      if (audio[0]?.url) return audio[0].url;
+      const prog = (data?.formatStreams || []).find((s: any) => s?.url);
+      if (prog?.url) return prog.url;
+    } catch { continue; }
+  }
+  return null;
+}
+
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.adminforge.de',
+  'https://api.piped.private.coffee',
+  'https://pipedapi.reallyaweso.me',
+  'https://pipedapi.darkness.services',
+];
+
+// Extracts an audio stream for a YouTube video via Piped (fallback).
+async function tryPipedAudio(videoId: string): Promise<string | null> {
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/streams/${videoId}`, {
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(9000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue;
+      const data = await res.json();
+      const audio = (data?.audioStreams || [])
+        .filter((s: any) => s?.url)
+        .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+      if (audio[0]?.url) return audio[0].url;
+    } catch { continue; }
+  }
+  return null;
+}
+
+// Returns a downloadable audio URL for a YouTube video id (InnerTube → Invidious → Piped → Cobalt).
+async function getYouTubeAudio(videoId: string, supabase?: any): Promise<string | null> {
+  const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+  let url = await ytInnertubeAudio(videoId, cookies);
+  if (!url) url = await tryInvidiousAudio(videoId);
+  if (!url) url = await tryPipedAudio(videoId);
+  if (!url) url = await tryCobalt(`https://www.youtube.com/watch?v=${videoId}`);
+  return url;
+}
+
+
+// Finds the best matching YouTube video id for a text query.
+async function ytFindVideoId(query: string, supabase?: any): Promise<string | null> {
+  try {
+    const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+    const results = await ytInnertubeSearch(query, cookies);
+    for (const r of results) {
+      const id = extractYouTubeId(r.url);
+      if (id) return id;
+    }
+  } catch { /* ignore */ }
+  // fallback: DuckDuckGo
+  try {
+    const results = await duckSearch(query, { youtubeOnly: true });
+    for (const r of results) {
+      const id = extractYouTubeId(r.url);
+      if (id) return id;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// Send audio by URL: upload bytes first (most reliable), then remote URL, then link.
+async function sendAudioSmart(chatId: number, audioUrl: string, opts: { caption?: string; title?: string; performer?: string; thumb?: string; replyId?: number } = {}) {
+  const { caption = '', title = '', performer = '', replyId } = opts;
+  const got = await fetchBytes(audioUrl);
+  if (got) {
+    try {
+      await tgUpload('sendAudio',
+        { chat_id: chatId, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(title ? { title } : {}), ...(performer ? { performer } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) },
+        [{ field: 'audio', bytes: got.bytes, filename: `${(title || 'audio').replace(/[^\w\u0600-\u06FF .-]/g, '_').slice(0, 60)}.mp3`, mime: got.mime.startsWith('audio') ? got.mime : 'audio/mpeg' }]);
+      return true;
+    } catch (e) { console.error('sendAudioSmart upload failed:', e); }
+  }
+  try {
+    await tgCall('sendAudio', { chat_id: chatId, audio: audioUrl, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(title ? { title } : {}), ...(performer ? { performer } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) });
+    return true;
+  } catch (e) { console.error('sendAudioSmart url failed:', e); }
+  await sendMsg(chatId, `${caption}\n🔗 ${escapeHtml(audioUrl)}`, undefined, replyId);
+  return false;
+}
+
+// ==================== SPOTIFY (metadata search via cookies + YouTube audio) ====================
+
+type SpotifyTrack = { title: string; artists: string; album: string; url: string; image?: string; durationMs?: number; videoId?: string };
+
+let _spTokenCache: { token: string; exp: number } | null = null;
+
+async function getSpotifyCookies(supabase: any): Promise<string | null> {
+  try {
+    const raw = await getConfig(supabase, 'spotify_cookies');
+    return raw ? raw.split('|').map((p: string) => p.trim()).filter(Boolean).join('; ') : null;
+  } catch { return null; }
+}
+
+// Gets a Spotify Web API access token (uses stored cookies when available).
+async function getSpotifyToken(supabase: any): Promise<string | null> {
+  if (_spTokenCache && Date.now() < _spTokenCache.exp - 30_000) return _spTokenCache.token;
+  try {
+    const cookie = await getSpotifyCookies(supabase);
+    const res = await fetch('https://open.spotify.com/get_access_token?reason=transport&productType=web_player', {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        'Accept': 'application/json',
+        'App-Platform': 'WebPlayer',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (!data?.accessToken) return null;
+    _spTokenCache = { token: data.accessToken, exp: data.accessTokenExpirationTimestampMs || (Date.now() + 3_000_000) };
+    return data.accessToken;
+  } catch { return null; }
+}
+
+// Searches Spotify tracks metadata.
+async function searchSpotify(query: string, supabase: any, limit = 5): Promise<SpotifyTrack[]> {
+  const token = await getSpotifyToken(supabase);
+  if (!token) return [];
+  try {
+    const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`, {
+      headers: { Authorization: `Bearer ${token}`, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = data?.tracks?.items || [];
+    return items.map((t: any) => ({
+      title: t.name || '',
+      artists: (t.artists || []).map((a: any) => a.name).join('، '),
+      album: t.album?.name || '',
+      url: t.external_urls?.spotify || '',
+      image: t.album?.images?.[0]?.url,
+      durationMs: t.duration_ms,
+    })).filter((t: SpotifyTrack) => t.title);
+  } catch (e) { console.error('searchSpotify error:', e); return []; }
+}
+
+// Fallback music metadata search via the free iTunes Search API (no auth needed).
+async function searchITunes(query: string, limit = 5): Promise<SpotifyTrack[]> {
+  try {
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=${limit}`, {
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data?.results || []).map((t: any) => ({
+      title: t.trackName || '',
+      artists: t.artistName || '',
+      album: t.collectionName || '',
+      url: t.trackViewUrl || '',
+      image: t.artworkUrl100,
+      durationMs: t.trackTimeMillis,
+    })).filter((t: SpotifyTrack) => t.title);
+  } catch (e) { console.error('searchITunes error:', e); return []; }
+}
+
+// Unified music metadata search: Spotify (via cookies) first, then iTunes fallback.
+async function searchMusic(query: string, supabase: any, limit = 5): Promise<{ tracks: SpotifyTrack[]; source: string }> {
+  const sp = await searchSpotify(query, supabase, limit);
+  if (sp.length > 0) return { tracks: sp, source: 'سبوتيفاي' };
+  const it = await searchITunes(query, limit);
+  return { tracks: it, source: it.length ? 'iTunes' : '' };
+}
+
+function fmtDuration(ms?: number): string {
+  if (!ms) return '';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 
 // ==================== VIDEO DOWNLOADER ====================
 
@@ -1985,21 +2218,34 @@ async function handleCommand(supabase: any, update: any) {
     case '/setcookies': case '/setcookie': case '/cookies': {
       if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
       const doc = replyMsg?.document;
-      if (!doc?.file_id) { await sendMsg(chatId, '🍪 رد على ملف <code>cookies.txt</code> (صيغة Netscape) بهذا الأمر لتحديث كوكيز يوتيوب.'); break; }
+      if (!doc?.file_id) { await sendMsg(chatId, '🍪 رد على ملف <code>cookies.txt</code> (صيغة Netscape) بهذا الأمر.\nالنوع يتحدد تلقائياً (يوتيوب/سبوتيفاي)، أو حدّده: <code>/setcookies spotify</code>'); break; }
       const text = await downloadTgFileText(doc.file_id);
       if (!text) { await sendMsg(chatId, '❌ ما قدرت أقرأ الملف.'); break; }
       const pairs: string[] = [];
+      let domain = '';
       for (const line of text.split(/\r?\n/)) {
         if (!line || line.startsWith('#')) continue;
         const parts = line.split('\t');
-        if (parts.length >= 7 && parts[5] && parts[6]) pairs.push(`${parts[5].trim()}=${parts[6].trim()}`);
+        if (parts.length >= 7 && parts[5] && parts[6]) {
+          pairs.push(`${parts[5].trim()}=${parts[6].trim()}`);
+          if (!domain && parts[0]) domain = parts[0].toLowerCase();
+        }
       }
       if (pairs.length === 0) { await sendMsg(chatId, '❌ الملف مش بصيغة كوكيز Netscape صحيحة.'); break; }
-      await supabase.from('telegram_config').upsert({ key: 'youtube_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
-      _ytCookieCacheClear();
-      await sendMsg(chatId, `✅ تم تحديث كوكيز يوتيوب (${pairs.length} كوكي). البحث والتنزيل هيستخدموها دلوقتي.`);
+      const hint = (args[0] || '').toLowerCase();
+      const isSpotify = hint === 'spotify' || /spotify/.test(domain) || /spotify/i.test(doc.file_name || '');
+      if (isSpotify) {
+        await supabase.from('telegram_config').upsert({ key: 'spotify_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
+        _spTokenCache = null;
+        await sendMsg(chatId, `✅ تم تحديث كوكيز سبوتيفاي (${pairs.length} كوكي). أمر <code>/music</code> هيستخدمها دلوقتي.`);
+      } else {
+        await supabase.from('telegram_config').upsert({ key: 'youtube_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
+        _ytCookieCacheClear();
+        await sendMsg(chatId, `✅ تم تحديث كوكيز يوتيوب (${pairs.length} كوكي). البحث والتنزيل هيستخدموها دلوقتي.`);
+      }
       break;
     }
+
 
 
 
@@ -2212,12 +2458,67 @@ async function handleCommand(supabase: any, update: any) {
 
     case '/searchyt': case '/يوتيوب': {
       const query = args.join(' ');
-      if (!query) { await sendMsg(chatId, '❌ اكتب ما تريد البحث عنه: /searchyt موضوع'); break; }
+      if (!query) { await sendMsg(chatId, '❌ اكتب ما تريد البحث عنه: <code>/searchyt اسم الفيديو</code>'); break; }
       await sendMsg(chatId, `🔍 جاري البحث في يوتيوب عن "${query}"...`);
-      const result = await searchYouTube(query, supabase);
-      await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${result}`);
+      try {
+        const cookies = await getYouTubeCookies(supabase);
+        const results = await ytInnertubeSearch(query, cookies);
+        if (results.length === 0) {
+          const result = await searchYouTube(query, supabase);
+          await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${result}`);
+          break;
+        }
+        const lines: string[] = [];
+        const buttons: any[] = [];
+        const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
+        results.slice(0, 6).forEach((r, i) => {
+          const id = extractYouTubeId(r.url);
+          lines.push(`${emojis[i]} <b>${escapeHtml(r.title)}</b>\n   📺 ${escapeHtml(r.snippet)}\n   🔗 <a href="${escapeHtml(r.url)}">مشاهدة</a>`);
+          if (id) buttons.push([
+            { text: `${emojis[i]} 🎬 فيديو`, callback_data: `ytv:${id}` },
+            { text: `🎵 صوت`, callback_data: `yta:${id}` },
+          ]);
+        });
+        await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${lines.join('\n\n')}`, buttons.length ? { inline_keyboard: buttons } : undefined);
+      } catch (e) {
+        await sendMsg(chatId, humanError('بحث يوتيوب', e));
+      }
       break;
     }
+
+    case '/music': case '/song': case '/spotify': case '/موسيقى': case '/اغنية': case '/أغنية': {
+      const query = args.join(' ');
+      if (!query) { await sendMsg(chatId, '🎵 اكتب اسم الأغنية أو الفنان:\n<code>/music عمرو دياب تملي معاك</code>'); break; }
+      await sendMsg(chatId, `🎧 جاري البحث عن "${query}"...`);
+      try {
+        const { tracks, source } = await searchMusic(query, supabase, 5);
+        if (tracks.length === 0) {
+          // Metadata sources unavailable → search YouTube directly for the audio
+          const id = await ytFindVideoId(`${query} audio`, supabase);
+          if (!id) { await sendMsg(chatId, '😕 ما لقيتش الأغنية. جرّب اسم تاني.'); break; }
+          await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_voice' }).catch(() => {});
+          const audio = await getYouTubeAudio(id, supabase);
+          if (!audio) { await sendMsg(chatId, '😕 لقيت الأغنية بس ما قدرتش أحمّل الصوت.'); break; }
+          await sendAudioSmart(chatId, audio, { title: query, caption: `🎵 ${escapeHtml(query)}`, replyId: msg.message_id });
+          break;
+        }
+        // List the results with download buttons (resolve YouTube ids in parallel)
+        const ids = await Promise.all(tracks.map(t => ytFindVideoId(`${t.title} ${t.artists} audio`, supabase)));
+        const lines: string[] = [];
+        const buttons: any[] = [];
+        const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+        tracks.forEach((t, i) => {
+          const dur = fmtDuration(t.durationMs);
+          lines.push(`${emojis[i]} <b>${escapeHtml(t.title)}</b>\n   👤 ${escapeHtml(t.artists)}${dur ? ` · ⏱️ ${dur}` : ''}${t.album ? `\n   💿 ${escapeHtml(t.album)}` : ''}`);
+          if (ids[i]) buttons.push([{ text: `${emojis[i]} ⬇️ تحميل: ${t.title.slice(0, 25)}`, callback_data: `yta:${ids[i]}` }]);
+        });
+        await sendMsg(chatId, `🎵 <b>نتائج ${source}:</b>\n\n${lines.join('\n\n')}\n\n👇 اضغط لتحميل الأغنية كملف صوتي`, buttons.length ? { inline_keyboard: buttons } : undefined);
+      } catch (e) {
+        await sendMsg(chatId, humanError('بحث الموسيقى', e));
+      }
+      break;
+    }
+
 
     case '/searchweb': case '/بحث': {
       const query = args.join(' ');
@@ -2929,6 +3230,28 @@ async function handleCallback(supabase: any, cq: any) {
       }
       return;
     }
+  }
+
+  // YouTube video/audio download from search results
+  if (data.startsWith('ytv:') || data.startsWith('yta:')) {
+    const [kind, videoId] = data.split(':');
+    const isAudio = kind === 'yta';
+    await tgCall('answerCallbackQuery', { callback_query_id: cq.id, text: isAudio ? '🎵 جاري تحميل الصوت...' : '🎬 جاري تحميل الفيديو...' });
+    try {
+      await tgCall('sendChatAction', { chat_id: chatId, action: isAudio ? 'upload_voice' : 'upload_video' }).catch(() => {});
+      if (isAudio) {
+        const audio = await getYouTubeAudio(videoId, supabase);
+        if (!audio) { await sendMsg(chatId, '😕 ما قدرتش أحمّل الصوت. جرّب نتيجة تانية.'); return; }
+        await sendAudioSmart(chatId, audio, { caption: '🎵 تفضّل الصوت', title: 'audio' });
+      } else {
+        const res = await downloadVideo(`https://www.youtube.com/watch?v=${videoId}`, supabase);
+        if (res.ok && res.videoUrl) await sendVideoSmart(chatId, res.videoUrl, '✅ تفضّل الفيديو');
+        else await sendMsg(chatId, res.message);
+      }
+    } catch (e) {
+      await sendMsg(chatId, humanError('التحميل', e));
+    }
+    return;
   }
 
   if (data.startsWith('quiz_')) {
