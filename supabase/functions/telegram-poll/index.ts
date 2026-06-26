@@ -2385,12 +2385,67 @@ async function handleCommand(supabase: any, update: any) {
 
     case '/searchyt': case '/يوتيوب': {
       const query = args.join(' ');
-      if (!query) { await sendMsg(chatId, '❌ اكتب ما تريد البحث عنه: /searchyt موضوع'); break; }
+      if (!query) { await sendMsg(chatId, '❌ اكتب ما تريد البحث عنه: <code>/searchyt اسم الفيديو</code>'); break; }
       await sendMsg(chatId, `🔍 جاري البحث في يوتيوب عن "${query}"...`);
-      const result = await searchYouTube(query, supabase);
-      await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${result}`);
+      try {
+        const cookies = await getYouTubeCookies(supabase);
+        const results = await ytInnertubeSearch(query, cookies);
+        if (results.length === 0) {
+          const result = await searchYouTube(query, supabase);
+          await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${result}`);
+          break;
+        }
+        const lines: string[] = [];
+        const buttons: any[] = [];
+        const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
+        results.slice(0, 6).forEach((r, i) => {
+          const id = extractYouTubeId(r.url);
+          lines.push(`${emojis[i]} <b>${escapeHtml(r.title)}</b>\n   📺 ${escapeHtml(r.snippet)}\n   🔗 <a href="${escapeHtml(r.url)}">مشاهدة</a>`);
+          if (id) buttons.push([
+            { text: `${emojis[i]} 🎬 فيديو`, callback_data: `ytv:${id}` },
+            { text: `🎵 صوت`, callback_data: `yta:${id}` },
+          ]);
+        });
+        await sendMsg(chatId, `🎬 <b>نتائج يوتيوب:</b>\n\n${lines.join('\n\n')}`, buttons.length ? { inline_keyboard: buttons } : undefined);
+      } catch (e) {
+        await sendMsg(chatId, humanError('بحث يوتيوب', e));
+      }
       break;
     }
+
+    case '/music': case '/song': case '/spotify': case '/موسيقى': case '/اغنية': case '/أغنية': {
+      const query = args.join(' ');
+      if (!query) { await sendMsg(chatId, '🎵 اكتب اسم الأغنية أو الفنان:\n<code>/music عمرو دياب تملي معاك</code>'); break; }
+      await sendMsg(chatId, `🎧 جاري البحث في سبوتيفاي عن "${query}"...`);
+      try {
+        const tracks = await searchSpotify(query, supabase, 5);
+        if (tracks.length === 0) {
+          // Spotify unavailable → search YouTube directly for the audio
+          const id = await ytFindVideoId(`${query} audio`, supabase);
+          if (!id) { await sendMsg(chatId, '😕 ما لقيتش الأغنية. جرّب اسم تاني.'); break; }
+          await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_voice' }).catch(() => {});
+          const audio = await getYouTubeAudio(id, supabase);
+          if (!audio) { await sendMsg(chatId, '😕 لقيت الأغنية بس ما قدرتش أحمّل الصوت.'); break; }
+          await sendAudioSmart(chatId, audio, { title: query, caption: `🎵 ${escapeHtml(query)}`, replyId: msg.message_id });
+          break;
+        }
+        // List the results with download buttons (resolve YouTube ids in parallel)
+        const ids = await Promise.all(tracks.map(t => ytFindVideoId(`${t.title} ${t.artists} audio`, supabase)));
+        const lines: string[] = [];
+        const buttons: any[] = [];
+        const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
+        tracks.forEach((t, i) => {
+          const dur = fmtDuration(t.durationMs);
+          lines.push(`${emojis[i]} <b>${escapeHtml(t.title)}</b>\n   👤 ${escapeHtml(t.artists)}${dur ? ` · ⏱️ ${dur}` : ''}\n   💿 ${escapeHtml(t.album)}`);
+          if (ids[i]) buttons.push([{ text: `${emojis[i]} ⬇️ تحميل: ${t.title.slice(0, 25)}`, callback_data: `yta:${ids[i]}` }]);
+        });
+        await sendMsg(chatId, `🎵 <b>نتائج سبوتيفاي:</b>\n\n${lines.join('\n\n')}\n\n👇 اضغط لتحميل الأغنية كملف صوتي`, buttons.length ? { inline_keyboard: buttons } : undefined);
+      } catch (e) {
+        await sendMsg(chatId, humanError('بحث الموسيقى', e));
+      }
+      break;
+    }
+
 
     case '/searchweb': case '/بحث': {
       const query = args.join(' ');
