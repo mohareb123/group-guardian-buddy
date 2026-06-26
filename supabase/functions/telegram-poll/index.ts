@@ -2158,21 +2158,34 @@ async function handleCommand(supabase: any, update: any) {
     case '/setcookies': case '/setcookie': case '/cookies': {
       if (!isDeveloper(userId)) { await sendMsg(chatId, '🔒 هذا الأمر للمطور فقط.'); break; }
       const doc = replyMsg?.document;
-      if (!doc?.file_id) { await sendMsg(chatId, '🍪 رد على ملف <code>cookies.txt</code> (صيغة Netscape) بهذا الأمر لتحديث كوكيز يوتيوب.'); break; }
+      if (!doc?.file_id) { await sendMsg(chatId, '🍪 رد على ملف <code>cookies.txt</code> (صيغة Netscape) بهذا الأمر.\nالنوع يتحدد تلقائياً (يوتيوب/سبوتيفاي)، أو حدّده: <code>/setcookies spotify</code>'); break; }
       const text = await downloadTgFileText(doc.file_id);
       if (!text) { await sendMsg(chatId, '❌ ما قدرت أقرأ الملف.'); break; }
       const pairs: string[] = [];
+      let domain = '';
       for (const line of text.split(/\r?\n/)) {
         if (!line || line.startsWith('#')) continue;
         const parts = line.split('\t');
-        if (parts.length >= 7 && parts[5] && parts[6]) pairs.push(`${parts[5].trim()}=${parts[6].trim()}`);
+        if (parts.length >= 7 && parts[5] && parts[6]) {
+          pairs.push(`${parts[5].trim()}=${parts[6].trim()}`);
+          if (!domain && parts[0]) domain = parts[0].toLowerCase();
+        }
       }
       if (pairs.length === 0) { await sendMsg(chatId, '❌ الملف مش بصيغة كوكيز Netscape صحيحة.'); break; }
-      await supabase.from('telegram_config').upsert({ key: 'youtube_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
-      _ytCookieCacheClear();
-      await sendMsg(chatId, `✅ تم تحديث كوكيز يوتيوب (${pairs.length} كوكي). البحث والتنزيل هيستخدموها دلوقتي.`);
+      const hint = (args[0] || '').toLowerCase();
+      const isSpotify = hint === 'spotify' || /spotify/.test(domain) || /spotify/i.test(doc.file_name || '');
+      if (isSpotify) {
+        await supabase.from('telegram_config').upsert({ key: 'spotify_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
+        _spTokenCache = null;
+        await sendMsg(chatId, `✅ تم تحديث كوكيز سبوتيفاي (${pairs.length} كوكي). أمر <code>/music</code> هيستخدمها دلوقتي.`);
+      } else {
+        await supabase.from('telegram_config').upsert({ key: 'youtube_cookies', value: pairs.join('|'), updated_at: new Date().toISOString() });
+        _ytCookieCacheClear();
+        await sendMsg(chatId, `✅ تم تحديث كوكيز يوتيوب (${pairs.length} كوكي). البحث والتنزيل هيستخدموها دلوقتي.`);
+      }
       break;
     }
+
 
 
 
