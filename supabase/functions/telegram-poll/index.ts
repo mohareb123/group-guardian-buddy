@@ -3194,7 +3194,7 @@ async function handleCallback(supabase: any, cq: any) {
     return;
   }
 
-
+  if (data.startsWith('quiz_')) {
     const [, sel, cor] = data.split('_');
     if (sel === cor) {
       await supabase.rpc('increment_points', { p_user_id: userId, p_chat_id: chatId }).catch(() => {});
