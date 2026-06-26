@@ -461,9 +461,9 @@ function helpMenuText(cat: string): string {
     economy:
 `💰 <b>الاقتصاد</b>\n━━━━━━━━━━━━━━\n/coins /daily /shop /buy\n/gift /transfer /top /points\n/profile /trust /reputation`,
     search:
-`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث في يوتيوب 🎬\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
+`🔍 <b>البحث والأدوات</b>\n━━━━━━━━━━━━━━\n/searchweb — بحث في الويب 🌐\n/image — بحث عن صور وتنزيلها 🖼️\n/searchbook — بحث عن كتب 📚\n/searchfile — بحث عن ملفات (PDF/ZIP/MP3) 📂\n/searchyt — بحث عن فيديوهات يوتيوب 🎬\n/music — بحث وتنزيل موسيقى (سبوتيفاي) 🎵\n/browse — تصفح تفاعلي وتلخيص صفحة 🌐\n/screenshot — لقطة شاشة لأي موقع (كروم) 📸\n/open — افتح موقع + صورة + تلخيص 🖥️\n/get — تنزيل أي ملف برابط مباشر ⬇️`,
     media:
-`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
+`📥 <b>تنزيل الميديا</b>\n━━━━━━━━━━━━━━\n/download &lt;رابط&gt; — فيديو (يوتيوب/تيك توك/انستغرام/X)\n/searchyt &lt;بحث&gt; — فيديوهات يوتيوب + تحميل 🎬\n/music &lt;بحث&gt; — أغاني سبوتيفاي كصوت 🎵\n/get &lt;رابط&gt; — أي ملف مباشر\n/image &lt;بحث&gt; — صور`,
     tools:
 `🧰 <b>أدوات مفيدة</b>\n━━━━━━━━━━━━━━\n🌤️ /weather &lt;مدينة&gt; — الطقس\n💰 /crypto &lt;عملة&gt; — أسعار العملات الرقمية\n🌍 /translate &lt;لغة&gt; &lt;نص&gt; — ترجمة\n📱 /qr &lt;نص/رابط&gt; — توليد QR Code\n📰 /rss &lt;رابط&gt; — قراءة تغذية RSS`,
     fun:
