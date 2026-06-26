@@ -669,14 +669,45 @@ async function tryInvidiousAudio(videoId: string): Promise<string | null> {
   return null;
 }
 
-// Returns a downloadable audio URL for a YouTube video id (InnerTube → Invidious → Cobalt).
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.adminforge.de',
+  'https://api.piped.private.coffee',
+  'https://pipedapi.reallyaweso.me',
+  'https://pipedapi.darkness.services',
+];
+
+// Extracts an audio stream for a YouTube video via Piped (fallback).
+async function tryPipedAudio(videoId: string): Promise<string | null> {
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/streams/${videoId}`, {
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(9000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue;
+      const data = await res.json();
+      const audio = (data?.audioStreams || [])
+        .filter((s: any) => s?.url)
+        .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+      if (audio[0]?.url) return audio[0].url;
+    } catch { continue; }
+  }
+  return null;
+}
+
+// Returns a downloadable audio URL for a YouTube video id (InnerTube → Invidious → Piped → Cobalt).
 async function getYouTubeAudio(videoId: string, supabase?: any): Promise<string | null> {
   const cookies = supabase ? await getYouTubeCookies(supabase) : null;
   let url = await ytInnertubeAudio(videoId, cookies);
   if (!url) url = await tryInvidiousAudio(videoId);
+  if (!url) url = await tryPipedAudio(videoId);
   if (!url) url = await tryCobalt(`https://www.youtube.com/watch?v=${videoId}`);
   return url;
 }
+
 
 // Finds the best matching YouTube video id for a text query.
 async function ytFindVideoId(query: string, supabase?: any): Promise<string | null> {
