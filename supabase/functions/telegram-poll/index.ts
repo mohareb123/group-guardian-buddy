@@ -2458,11 +2458,11 @@ async function handleCommand(supabase: any, update: any) {
     case '/music': case '/song': case '/spotify': case '/موسيقى': case '/اغنية': case '/أغنية': {
       const query = args.join(' ');
       if (!query) { await sendMsg(chatId, '🎵 اكتب اسم الأغنية أو الفنان:\n<code>/music عمرو دياب تملي معاك</code>'); break; }
-      await sendMsg(chatId, `🎧 جاري البحث في سبوتيفاي عن "${query}"...`);
+      await sendMsg(chatId, `🎧 جاري البحث عن "${query}"...`);
       try {
-        const tracks = await searchSpotify(query, supabase, 5);
+        const { tracks, source } = await searchMusic(query, supabase, 5);
         if (tracks.length === 0) {
-          // Spotify unavailable → search YouTube directly for the audio
+          // Metadata sources unavailable → search YouTube directly for the audio
           const id = await ytFindVideoId(`${query} audio`, supabase);
           if (!id) { await sendMsg(chatId, '😕 ما لقيتش الأغنية. جرّب اسم تاني.'); break; }
           await tgCall('sendChatAction', { chat_id: chatId, action: 'upload_voice' }).catch(() => {});
@@ -2478,10 +2478,10 @@ async function handleCommand(supabase: any, update: any) {
         const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'];
         tracks.forEach((t, i) => {
           const dur = fmtDuration(t.durationMs);
-          lines.push(`${emojis[i]} <b>${escapeHtml(t.title)}</b>\n   👤 ${escapeHtml(t.artists)}${dur ? ` · ⏱️ ${dur}` : ''}\n   💿 ${escapeHtml(t.album)}`);
+          lines.push(`${emojis[i]} <b>${escapeHtml(t.title)}</b>\n   👤 ${escapeHtml(t.artists)}${dur ? ` · ⏱️ ${dur}` : ''}${t.album ? `\n   💿 ${escapeHtml(t.album)}` : ''}`);
           if (ids[i]) buttons.push([{ text: `${emojis[i]} ⬇️ تحميل: ${t.title.slice(0, 25)}`, callback_data: `yta:${ids[i]}` }]);
         });
-        await sendMsg(chatId, `🎵 <b>نتائج سبوتيفاي:</b>\n\n${lines.join('\n\n')}\n\n👇 اضغط لتحميل الأغنية كملف صوتي`, buttons.length ? { inline_keyboard: buttons } : undefined);
+        await sendMsg(chatId, `🎵 <b>نتائج ${source}:</b>\n\n${lines.join('\n\n')}\n\n👇 اضغط لتحميل الأغنية كملف صوتي`, buttons.length ? { inline_keyboard: buttons } : undefined);
       } catch (e) {
         await sendMsg(chatId, humanError('بحث الموسيقى', e));
       }
