@@ -777,11 +777,40 @@ async function searchSpotify(query: string, supabase: any, limit = 5): Promise<S
   } catch (e) { console.error('searchSpotify error:', e); return []; }
 }
 
+// Fallback music metadata search via the free iTunes Search API (no auth needed).
+async function searchITunes(query: string, limit = 5): Promise<SpotifyTrack[]> {
+  try {
+    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=${limit}`, {
+      headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data?.results || []).map((t: any) => ({
+      title: t.trackName || '',
+      artists: t.artistName || '',
+      album: t.collectionName || '',
+      url: t.trackViewUrl || '',
+      image: t.artworkUrl100,
+      durationMs: t.trackTimeMillis,
+    })).filter((t: SpotifyTrack) => t.title);
+  } catch (e) { console.error('searchITunes error:', e); return []; }
+}
+
+// Unified music metadata search: Spotify (via cookies) first, then iTunes fallback.
+async function searchMusic(query: string, supabase: any, limit = 5): Promise<{ tracks: SpotifyTrack[]; source: string }> {
+  const sp = await searchSpotify(query, supabase, limit);
+  if (sp.length > 0) return { tracks: sp, source: 'سبوتيفاي' };
+  const it = await searchITunes(query, limit);
+  return { tracks: it, source: it.length ? 'iTunes' : '' };
+}
+
 function fmtDuration(ms?: number): string {
   if (!ms) return '';
   const s = Math.round(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
+
 
 // ==================== VIDEO DOWNLOADER ====================
 
