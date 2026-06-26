@@ -610,6 +610,179 @@ async function ytInnertubePlayer(videoId: string, cookieHeader: string | null): 
   } catch { return null; }
 }
 
+// Extracts a direct audio-only stream URL (m4a/webm) for a YouTube video using
+// the InnerTube ANDROID client + cookies. Falls back to progressive formats.
+async function ytInnertubeAudio(videoId: string, cookieHeader: string | null): Promise<string | null> {
+  try {
+    const headers = await ytAuthHeaders(cookieHeader);
+    const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${YT_INNERTUBE_KEY}&prettyPrint=false`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'ANDROID',
+            clientVersion: '19.09.37',
+            androidSdkVersion: 30,
+            hl: 'ar', gl: 'EG',
+            userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+          },
+        },
+        videoId,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.playabilityStatus?.status && data.playabilityStatus.status !== 'OK') return null;
+    const adaptive = data?.streamingData?.adaptiveFormats || [];
+    const audio = adaptive
+      .filter((f: any) => f.url && /audio/i.test(f.mimeType || ''))
+      .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+    if (audio[0]?.url) return audio[0].url;
+    // fallback: progressive (audio+video) stream
+    const formats = data?.streamingData?.formats || [];
+    const pick = formats.find((f: any) => f.url);
+    return pick?.url || null;
+  } catch { return null; }
+}
+
+// Extracts an audio stream for a YouTube video via Invidious (fallback).
+async function tryInvidiousAudio(videoId: string): Promise<string | null> {
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/api/v1/videos/${videoId}`, {
+        headers: { 'User-Agent': BROWSER_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) continue;
+      const data = await res.json();
+      const audio = (data?.adaptiveFormats || [])
+        .filter((s: any) => s?.url && /audio/i.test(s.type || ''))
+        .sort((a: any, b: any) => (parseInt(b.bitrate) || 0) - (parseInt(a.bitrate) || 0));
+      if (audio[0]?.url) return audio[0].url;
+      const prog = (data?.formatStreams || []).find((s: any) => s?.url);
+      if (prog?.url) return prog.url;
+    } catch { continue; }
+  }
+  return null;
+}
+
+// Returns a downloadable audio URL for a YouTube video id (InnerTube → Invidious → Cobalt).
+async function getYouTubeAudio(videoId: string, supabase?: any): Promise<string | null> {
+  const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+  let url = await ytInnertubeAudio(videoId, cookies);
+  if (!url) url = await tryInvidiousAudio(videoId);
+  if (!url) url = await tryCobalt(`https://www.youtube.com/watch?v=${videoId}`);
+  return url;
+}
+
+// Finds the best matching YouTube video id for a text query.
+async function ytFindVideoId(query: string, supabase?: any): Promise<string | null> {
+  try {
+    const cookies = supabase ? await getYouTubeCookies(supabase) : null;
+    const results = await ytInnertubeSearch(query, cookies);
+    for (const r of results) {
+      const id = extractYouTubeId(r.url);
+      if (id) return id;
+    }
+  } catch { /* ignore */ }
+  // fallback: DuckDuckGo
+  try {
+    const results = await duckSearch(query, { youtubeOnly: true });
+    for (const r of results) {
+      const id = extractYouTubeId(r.url);
+      if (id) return id;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// Send audio by URL: upload bytes first (most reliable), then remote URL, then link.
+async function sendAudioSmart(chatId: number, audioUrl: string, opts: { caption?: string; title?: string; performer?: string; thumb?: string; replyId?: number } = {}) {
+  const { caption = '', title = '', performer = '', replyId } = opts;
+  const got = await fetchBytes(audioUrl);
+  if (got) {
+    try {
+      await tgUpload('sendAudio',
+        { chat_id: chatId, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(title ? { title } : {}), ...(performer ? { performer } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) },
+        [{ field: 'audio', bytes: got.bytes, filename: `${(title || 'audio').replace(/[^\w\u0600-\u06FF .-]/g, '_').slice(0, 60)}.mp3`, mime: got.mime.startsWith('audio') ? got.mime : 'audio/mpeg' }]);
+      return true;
+    } catch (e) { console.error('sendAudioSmart upload failed:', e); }
+  }
+  try {
+    await tgCall('sendAudio', { chat_id: chatId, audio: audioUrl, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(title ? { title } : {}), ...(performer ? { performer } : {}), ...(replyId ? { reply_to_message_id: replyId } : {}) });
+    return true;
+  } catch (e) { console.error('sendAudioSmart url failed:', e); }
+  await sendMsg(chatId, `${caption}\n🔗 ${escapeHtml(audioUrl)}`, undefined, replyId);
+  return false;
+}
+
+// ==================== SPOTIFY (metadata search via cookies + YouTube audio) ====================
+
+type SpotifyTrack = { title: string; artists: string; album: string; url: string; image?: string; durationMs?: number; videoId?: string };
+
+let _spTokenCache: { token: string; exp: number } | null = null;
+
+async function getSpotifyCookies(supabase: any): Promise<string | null> {
+  try {
+    const raw = await getConfig(supabase, 'spotify_cookies');
+    return raw ? raw.split('|').map((p: string) => p.trim()).filter(Boolean).join('; ') : null;
+  } catch { return null; }
+}
+
+// Gets a Spotify Web API access token (uses stored cookies when available).
+async function getSpotifyToken(supabase: any): Promise<string | null> {
+  if (_spTokenCache && Date.now() < _spTokenCache.exp - 30_000) return _spTokenCache.token;
+  try {
+    const cookie = await getSpotifyCookies(supabase);
+    const res = await fetch('https://open.spotify.com/get_access_token?reason=transport&productType=web_player', {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        'Accept': 'application/json',
+        'App-Platform': 'WebPlayer',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (!data?.accessToken) return null;
+    _spTokenCache = { token: data.accessToken, exp: data.accessTokenExpirationTimestampMs || (Date.now() + 3_000_000) };
+    return data.accessToken;
+  } catch { return null; }
+}
+
+// Searches Spotify tracks metadata.
+async function searchSpotify(query: string, supabase: any, limit = 5): Promise<SpotifyTrack[]> {
+  const token = await getSpotifyToken(supabase);
+  if (!token) return [];
+  try {
+    const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}`, {
+      headers: { Authorization: `Bearer ${token}`, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = data?.tracks?.items || [];
+    return items.map((t: any) => ({
+      title: t.name || '',
+      artists: (t.artists || []).map((a: any) => a.name).join('، '),
+      album: t.album?.name || '',
+      url: t.external_urls?.spotify || '',
+      image: t.album?.images?.[0]?.url,
+      durationMs: t.duration_ms,
+    })).filter((t: SpotifyTrack) => t.title);
+  } catch (e) { console.error('searchSpotify error:', e); return []; }
+}
+
+function fmtDuration(ms?: number): string {
+  if (!ms) return '';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 // ==================== VIDEO DOWNLOADER ====================
 
 const COBALT_INSTANCES = [
