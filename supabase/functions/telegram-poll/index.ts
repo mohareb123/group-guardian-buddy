@@ -469,7 +469,7 @@ function helpMenuText(cat: string): string {
     fun:
 `🎮 <b>الترفيه والتفاعل</b>\n━━━━━━━━━━━━━━\n/quiz /game /truth /dare\n/joke /hack /roll /flip /random\n/whisper — همسة سرية\n/court — محكمة المجموعة\n/challenge /mychallenges`,
     all:
-`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /browse\n⬇️ <b>تنزيل:</b> /download /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
+`📋 <b>دليل الأوامر الكامل</b>\n━━━━━━━━━━━━━━\n☁️ استضافة • 🤖 فادي • 👑 إدارة\n🛡️ حماية • 💰 اقتصاد • 🔍 بحث\n📥 ميديا • 🧰 أدوات • 🎮 ترفيه\n\n🔍 <b>بحث:</b> /searchweb /image /searchfile /searchbook /searchyt /music /browse\n⬇️ <b>تنزيل:</b> /download /music /get\n🧰 <b>أدوات:</b> /weather /crypto /translate /qr /rss\n\n💡 /menu — القائمة الرئيسية | /dev — المطور`,
   };
   return sections[cat] || sections.all;
 }
