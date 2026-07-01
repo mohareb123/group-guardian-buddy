@@ -31,6 +31,7 @@ const Index = () => {
       case "tickets": return <TicketsPanel />;
       case "broadcast": return <BroadcastPanel />;
       case "console": return <ConsolePanel />;
+      case "cloud": return <CloudServerPanel />;
       case "settings": return <SettingsPanel />;
       default: return <DashboardHome />;
     }
