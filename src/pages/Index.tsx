@@ -11,8 +11,9 @@ import EconomyPanel from "@/components/dashboard/EconomyPanel";
 import TicketsPanel from "@/components/dashboard/TicketsPanel";
 import BroadcastPanel from "@/components/dashboard/BroadcastPanel";
 import ConsolePanel from "@/components/dashboard/ConsolePanel";
+import CloudServerPanel from "@/components/dashboard/CloudServerPanel";
 
-export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets" | "broadcast" | "console";
+export type PanelId = "home" | "groups" | "members" | "logs" | "whispers" | "entertainment" | "settings" | "economy" | "tickets" | "broadcast" | "console" | "cloud";
 
 const Index = () => {
   const [activePanel, setActivePanel] = useState<PanelId>("home");
