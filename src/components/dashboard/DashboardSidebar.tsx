@@ -1,4 +1,4 @@
-import { Bot, Home, Users, MessageSquare, Shield, Gamepad2, Settings, Menu, X, Zap, ExternalLink, LogOut, Coins, Ticket, Megaphone, Terminal } from "lucide-react";
+import { Bot, Home, Users, MessageSquare, Shield, Gamepad2, Settings, Menu, X, Zap, ExternalLink, LogOut, Coins, Ticket, Megaphone, Terminal, Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
